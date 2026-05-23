@@ -1,17 +1,19 @@
 import { useState, useEffect } from 'react';
-import { Plus, Search, Pencil, Eye, Package, Trash2, Upload, X } from 'lucide-react';
+import { Plus, Search, Pencil, Eye, Package, Trash2, Upload, X, Download } from 'lucide-react';
 import { formatCOP } from '../utils/currency';
+import { getLocalDateString } from '../utils/date';
 import { productApi, type Product } from '../services/productService';
 import { inventoryApi, type InventoryItem } from '../services/inventoryService';
 import { useApiCache, invalidateCache } from '../hooks/useApiCache';
 import { useRole } from '../hooks/useRole';
+import { exportToExcel } from '../utils/exportExcel';
 import Modal from '../components/Modal';
 import ConfirmModal from '../components/ConfirmModal';
 import Pagination from '../components/Pagination';
 import '../styles/pages.css';
 
 export default function Productos() {
-  const { canCreate: canCreateProduct, canEdit: canEditProduct, canForceDelete: canForceDeleteProduct } = useRole();
+  const { canCreate: canCreateProduct, canEdit: canEditProduct, canForceDelete: canForceDeleteProduct, isAdmin } = useRole();
 
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(0);
@@ -143,6 +145,33 @@ export default function Productos() {
     }
   };
 
+  const handleExport = async () => {
+    try {
+      const all = (await productApi.getAll({ search: search || undefined, size: 1000 })).content;
+      const rows = all.map((p) => [
+        p.id,
+        p.name,
+        p.description || '',
+        p.price,
+        p.stock,
+        p.category || '',
+        p.piecesPerUnit || 1,
+      ]);
+      exportToExcel(
+        [
+          {
+            name: 'Productos',
+            headers: ['ID', 'Nombre', 'Descripción', 'Precio', 'Stock', 'Categoría', 'Piezas por unidad'],
+            rows,
+          },
+        ],
+        `productos_ordergo_${getLocalDateString()}.xlsx`
+      );
+    } catch {
+      setErrorModal('Error exportando productos');
+    }
+  };
+
   const renderImageUploader = (preview: string, currentUrl: string | undefined, onFileSelect: (file: File | null) => void, label: string) => (
     <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
       <div style={{ width: 100, height: 100, borderRadius: 'var(--radius-md)', overflow: 'hidden', border: '1px solid var(--color-border)', flexShrink: 0, backgroundColor: 'var(--color-bg)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -194,11 +223,18 @@ export default function Productos() {
           <h1>Productos</h1>
           <p>Gestiona tu catálogo de postres</p>
         </div>
-        {canCreateProduct() && (
-          <button className="btn btn-primary" onClick={openCreate}>
-            <Plus size={18} strokeWidth={1.5} /> Nuevo producto
-          </button>
-        )}
+        <div style={{ display: 'flex', gap: 10 }}>
+          {isAdmin && (
+            <button className="btn btn-outline" onClick={handleExport}>
+              <Download size={18} strokeWidth={1.5} /> Exportar Excel
+            </button>
+          )}
+          {canCreateProduct() && (
+            <button className="btn btn-primary" onClick={openCreate}>
+              <Plus size={18} strokeWidth={1.5} /> Nuevo producto
+            </button>
+          )}
+        </div>
       </div>
 
       {error && (

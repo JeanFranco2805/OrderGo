@@ -1,9 +1,11 @@
 import { useState, useEffect } from 'react';
-import { Plus, Search, Mail, Phone, Trash2, Eye, Pencil, MapPin } from 'lucide-react';
+import { Plus, Search, Mail, Phone, Trash2, Eye, Pencil, MapPin, Download } from 'lucide-react';
 import { customerApi, type Customer } from '../services/customerService';
 import { userApi, type User } from '../services/userService';
 import { useApiCache, invalidateCache } from '../hooks/useApiCache';
 import { useRole } from '../hooks/useRole';
+import { getLocalDateString } from '../utils/date';
+import { exportToExcel } from '../utils/exportExcel';
 import Modal from '../components/Modal';
 import ConfirmModal from '../components/ConfirmModal';
 import Pagination from '../components/Pagination';
@@ -14,15 +16,23 @@ const DIAS_SEMANA = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sáb
 const FRECUENCIAS = ['Semanal', 'Quincenal', 'Mensual'];
 
 export default function Clientes() {
-  const { canCreate: canCreateClient, canEdit: canEditClient, canForceDelete: canForceDeleteClient } = useRole();
+  const { canCreate: canCreateClient, canEdit: canEditClient, canForceDelete: canForceDeleteClient, isVendedor, isAdmin } = useRole();
 
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(0);
   const pageSize = 10;
 
-  const cacheKey = `customers-${page}-${search}`;
+  const cacheKey = isVendedor ? `my-customers-${search}` : `customers-${page}-${search}`;
   const { data, loading, error, refresh } = useApiCache(cacheKey, () =>
-    customerApi.getAll({ search: search || undefined, page, size: pageSize })
+    isVendedor
+      ? customerApi.getMyCustomers({}).then((res) => ({
+          content: res.filter((c) => !search || c.name.toLowerCase().includes(search.toLowerCase())),
+          totalPages: 1,
+          totalElements: res.length,
+          number: 0,
+          size: res.length,
+        }))
+      : customerApi.getAll({ search: search || undefined, page, size: pageSize })
   );
   const clients = data?.content ?? [];
   const totalPages = data?.totalPages ?? 0;
@@ -49,6 +59,37 @@ export default function Clientes() {
       setSellers(data.content.filter((u) => u.role === 'VENDEDOR'));
     } catch {
       // silent
+    }
+  };
+
+  const handleExport = async () => {
+    try {
+      const all = isVendedor
+        ? await customerApi.getMyCustomers({})
+        : (await customerApi.getAll({ size: 1000 })).content;
+      const rows = all.map((c) => [
+        c.id,
+        c.name,
+        c.email,
+        c.phone || '',
+        c.address || '',
+        c.zone || '',
+        c.visitDay || '',
+        c.visitFrequency || '',
+        c.sellerName || '',
+      ]);
+      exportToExcel(
+        [
+          {
+            name: 'Clientes',
+            headers: ['ID', 'Nombre', 'Email', 'Teléfono', 'Dirección', 'Zona / Barrio', 'Días de visita', 'Frecuencia', 'Vendedor'],
+            rows,
+          },
+        ],
+        `clientes_ordergo_${getLocalDateString()}.xlsx`
+      );
+    } catch {
+      setErrorModal('Error exportando clientes');
     }
   };
 
@@ -111,11 +152,18 @@ export default function Clientes() {
           <h1>Clientes</h1>
           <p>Gestiona tu base de clientes</p>
         </div>
-        {canCreateClient() && (
-          <button className="btn btn-primary" onClick={() => { loadSellers(); setShowModal(true); }}>
-            <Plus size={18} strokeWidth={1.5} /> Nuevo cliente
-          </button>
-        )}
+        <div style={{ display: 'flex', gap: 10 }}>
+          {isAdmin && (
+            <button className="btn btn-outline" onClick={handleExport}>
+              <Download size={18} strokeWidth={1.5} /> Exportar Excel
+            </button>
+          )}
+          {canCreateClient() && (
+            <button className="btn btn-primary" onClick={() => { loadSellers(); setShowModal(true); }}>
+              <Plus size={18} strokeWidth={1.5} /> Nuevo cliente
+            </button>
+          )}
+        </div>
       </div>
 
       {error && (
@@ -197,7 +245,7 @@ export default function Clientes() {
                   <td style={{ textAlign: 'right' }}>
                     <div style={{ display: 'inline-flex', gap: 8 }}>
                       <button className="navbar-icon-btn" aria-label="Ver" onClick={() => setSelectedClient(c)} style={{ padding: 6, borderRadius: 8, backgroundColor: 'var(--color-bg)' }}><Eye size={15} strokeWidth={1.5} /></button>
-                      {canEditClient() && (
+                      {canEditClient() && !isVendedor && (
                         <button className="navbar-icon-btn" aria-label="Editar" onClick={() => openEdit(c)} style={{ padding: 6, borderRadius: 8, backgroundColor: '#eef2ff', color: '#4f46e5' }}><Pencil size={15} strokeWidth={1.5} /></button>
                       )}
                       {canForceDeleteClient() && (

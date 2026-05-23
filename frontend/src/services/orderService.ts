@@ -17,7 +17,11 @@ export interface Order {
   customerId: number;
   customerName?: string;
   customerPhone?: string;
-  status: 'PENDIENTE' | 'EN_PREPARACION' | 'ENTREGADO' | 'CANCELADO';
+  sellerId?: number;
+  sellerName?: string;
+  deliveryPersonId?: number;
+  deliveryPersonName?: string;
+  status: 'PENDIENTE' | 'EN_PREPARACION' | 'ENTREGADO' | 'CANCELADO' | 'RECHAZADO';
   totalAmount: number;
   deliveryAddress?: string;
   paymentMethod?: string;

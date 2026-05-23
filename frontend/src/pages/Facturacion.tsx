@@ -1,10 +1,12 @@
 import { useState, useEffect } from 'react';
-import { Plus, Search, Eye, DollarSign, ArrowDownCircle, CheckCircle2, Clock, AlertCircle, FileText, Trash2, Send, Printer } from 'lucide-react';
+import { Plus, Search, Eye, DollarSign, ArrowDownCircle, CheckCircle2, Clock, AlertCircle, FileText, Trash2, Send, Printer, CheckSquare, Square, Truck } from 'lucide-react';
 import { formatCOP } from '../utils/currency';
+import { getLocalDateString } from '../utils/date';
 import { invoiceApi, type Invoice, type Payment } from '../services/invoiceService';
 import { customerApi, type Customer } from '../services/customerService';
-import { orderApi, type Order } from '../services/orderService';
+import { orderApi, type Order, type OrderItem } from '../services/orderService';
 import { discountApi, type Discount } from '../services/discountService';
+import { businessSettingsApi } from '../services/businessSettingsService';
 import { getPaymentMethods } from '../services/paymentMethodService';
 import { useApiCache, invalidateCache } from '../hooks/useApiCache';
 import { useRole } from '../hooks/useRole';
@@ -37,6 +39,7 @@ export default function Facturacion() {
   const totalPages = data?.totalPages ?? 0;
 
   const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null);
+  const [selectedInvoiceOrder, setSelectedInvoiceOrder] = useState<Order | null>(null);
   const [abonoModal, setAbonoModal] = useState<Invoice | null>(null);
   const [abonoAmount, setAbonoAmount] = useState('');
   const [abonoMethod, setAbonoMethod] = useState('EFECTIVO');
@@ -50,7 +53,7 @@ export default function Facturacion() {
   const [activeDiscounts, setActiveDiscounts] = useState<Discount[]>([]);
   const [createCustomerId, setCreateCustomerId] = useState<number | ''>('');
   const [createOrderId, setCreateOrderId] = useState<number | ''>('');
-  const [createDate, setCreateDate] = useState(new Date().toISOString().split('T')[0]);
+  const [createDate, setCreateDate] = useState(getLocalDateString());
   const [createDiscountCode, setCreateDiscountCode] = useState('');
   const [createLoading, setCreateLoading] = useState(false);
 
@@ -63,6 +66,14 @@ export default function Facturacion() {
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
 
   const [sendingIds, setSendingIds] = useState<Set<number>>(new Set());
+  const [selectedInvoiceIds, setSelectedInvoiceIds] = useState<Set<number>>(new Set());
+  const [businessSettings, setBusinessSettings] = useState<{ businessName?: string; phone?: string; address?: string }>({});
+
+  useEffect(() => {
+    businessSettingsApi.get()
+      .then((s) => setBusinessSettings(s))
+      .catch(() => setBusinessSettings({}));
+  }, []);
 
   useEffect(() => {
     const timer = setTimeout(() => setPage(0), 400);
@@ -76,7 +87,7 @@ export default function Facturacion() {
     setShowCreate(true);
     setCreateCustomerId('');
     setCreateOrderId('');
-    setCreateDate(new Date().toISOString().split('T')[0]);
+    setCreateDate(getLocalDateString());
     setCreateDiscountCode('');
     setPaymentStatus('none');
     setPartialAmount('');
@@ -147,7 +158,7 @@ export default function Facturacion() {
     const amount = parseFloat(abonoAmount);
     if (isNaN(amount) || amount <= 0) return;
     try {
-      await invoiceApi.addPayment(abonoModal.id, { paymentDate: new Date().toISOString().split('T')[0], amount, paymentMethod: abonoMethod });
+      await invoiceApi.addPayment(abonoModal.id, { paymentDate: getLocalDateString(), amount, paymentMethod: abonoMethod });
       invalidateCache('invoices-');
       refresh();
       setAbonoModal(null);
@@ -169,6 +180,282 @@ export default function Facturacion() {
     } finally {
       setConfirmDelete(null);
     }
+  };
+
+  const printInvoice = async (invoice: Invoice | null) => {
+    if (!invoice) return;
+    const settings = businessSettings;
+
+    let orderItemsHtml = '';
+    try {
+      if (invoice.orderId) {
+        const order = await orderApi.getById(invoice.orderId);
+        const items = (order as any).items || [];
+        if (items.length > 0) {
+          orderItemsHtml = `
+            <h3 style="font-size: 0.95rem; margin: 20px 0 10px; color: #374151;">Detalle de productos</h3>
+            <table style="width: 100%; border-collapse: collapse; font-size: 0.9rem;">
+              <thead>
+                <tr style="background-color: #f3f4f6;">
+                  <th style="border: 1px solid #e5e7eb; padding: 10px; text-align: left;">Producto</th>
+                  <th style="border: 1px solid #e5e7eb; padding: 10px; text-align: center;">Cantidad</th>
+                  <th style="border: 1px solid #e5e7eb; padding: 10px; text-align: right;">Precio unit.</th>
+                  <th style="border: 1px solid #e5e7eb; padding: 10px; text-align: right;">Subtotal</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${items.map((item: OrderItem) => `
+                  <tr>
+                    <td style="border: 1px solid #e5e7eb; padding: 10px;">${item.productName || item.offerName || 'Producto'}</td>
+                    <td style="border: 1px solid #e5e7eb; padding: 10px; text-align: center;">${item.quantity}</td>
+                    <td style="border: 1px solid #e5e7eb; padding: 10px; text-align: right;">${formatCOP(item.unitPrice || 0)}</td>
+                    <td style="border: 1px solid #e5e7eb; padding: 10px; text-align: right; font-weight: 600;">${formatCOP(item.subtotal || 0)}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          `;
+        }
+      }
+    } catch {
+      orderItemsHtml = '';
+    }
+
+    const paymentsHtml = (invoice.payments || []).map((p: Payment) => `
+      <tr>
+        <td style="border: 1px solid #e5e7eb; padding: 10px; font-size: 0.9rem;">${p.paymentDate}</td>
+        <td style="border: 1px solid #e5e7eb; padding: 10px; font-size: 0.9rem;">${p.paymentMethod}</td>
+        <td style="border: 1px solid #e5e7eb; padding: 10px; font-size: 0.9rem; text-align: right; font-weight: 600;">${formatCOP(p.amount)}</td>
+      </tr>
+    `).join('');
+
+    const printContent = `
+      <html>
+        <head><title>Factura ${invoice.invoiceNumber}</title></head>
+        <body style="font-family: Arial, sans-serif; padding: 40px; max-width: 700px; margin: 0 auto; color: #1f2937;">
+          <div style="text-align: center; border-bottom: 2px solid #111827; padding-bottom: 20px; margin-bottom: 30px;">
+            <h1 style="margin: 0; font-size: 28px; color: #111827;">${settings.businessName || 'Mi Negocio'}</h1>
+            <p style="margin: 4px 0 0; font-size: 13px; color: #6b7280;">${settings.address || ''}</p>
+            <p style="margin: 2px 0 0; font-size: 13px; color: #6b7280;">${settings.phone || ''}</p>
+            <h2 style="margin: 16px 0 0; font-size: 18px; color: #374151; letter-spacing: 2px; text-transform: uppercase;">Factura</h2>
+          </div>
+
+          <div style="display: flex; justify-content: space-between; margin-bottom: 24px; font-size: 0.9rem;">
+            <div>
+              <p style="margin: 2px 0;"><strong>Factura N°:</strong> ${invoice.invoiceNumber}</p>
+              <p style="margin: 2px 0;"><strong>Fecha:</strong> ${invoice.invoiceDate}</p>
+            </div>
+            <div style="text-align: right;">
+              <p style="margin: 2px 0;"><strong>Cliente:</strong> ${invoice.customerName}</p>
+              ${invoice.customerPhone ? `<p style="margin: 2px 0;"><strong>Teléfono:</strong> ${invoice.customerPhone}</p>` : ''}
+            </div>
+          </div>
+
+          ${orderItemsHtml}
+
+          <div style="width: 300px; margin-left: auto; margin-top: 20px; font-size: 0.95rem;">
+            ${invoice.subtotal ? `
+            <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #e5e7eb;">
+              <span>Subtotal</span>
+              <strong>${formatCOP(invoice.subtotal)}</strong>
+            </div>` : ''}
+            ${invoice.taxAmount ? `
+            <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #e5e7eb;">
+              <span>Impuestos</span>
+              <strong>${formatCOP(invoice.taxAmount)}</strong>
+            </div>` : ''}
+            <div style="display: flex; justify-content: space-between; padding: 8px 0; font-size: 1.05rem; font-weight: 700; border-top: 2px solid #111827;">
+              <span>TOTAL</span>
+              <span>${formatCOP(invoice.amount)}</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; padding: 6px 0; color: #047857;">
+              <span>Pagado</span>
+              <strong>${formatCOP(invoice.paid)}</strong>
+            </div>
+            <div style="display: flex; justify-content: space-between; padding: 6px 0; color: #b91c1c; font-weight: 700;">
+              <span>Saldo pendiente</span>
+              <span>${formatCOP(invoice.balance)}</span>
+            </div>
+          </div>
+
+          ${invoice.payments && invoice.payments.length > 0 ? `
+          <div style="margin-top: 30px;">
+            <h3 style="font-size: 0.95rem; margin-bottom: 10px; color: #374151;">Historial de pagos</h3>
+            <table style="width: 100%; border-collapse: collapse; font-size: 0.9rem;">
+              <thead>
+                <tr style="background-color: #f9fafb;">
+                  <th style="border: 1px solid #e5e7eb; padding: 8px; text-align: left;">Fecha</th>
+                  <th style="border: 1px solid #e5e7eb; padding: 8px; text-align: left;">Método</th>
+                  <th style="border: 1px solid #e5e7eb; padding: 8px; text-align: right;">Monto</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${paymentsHtml}
+              </tbody>
+            </table>
+          </div>
+          ` : ''}
+
+          <div style="margin-top: 40px; padding-top: 20px; border-top: 1px solid #e5e7eb; text-align: center; font-size: 0.8rem; color: #9ca3af;">
+            <p style="margin: 0;">Gracias por su compra.</p>
+            <p style="margin: 4px 0 0;">Esta factura es un comprobante de transacción.</p>
+          </div>
+        </body>
+      </html>
+    `;
+    const win = window.open('', '_blank');
+    if (!win) return;
+    win.document.write(printContent);
+    win.document.close();
+    win.focus();
+    setTimeout(() => { win.print(); win.close(); }, 300);
+  };
+
+  const toggleSelectInvoice = (invoiceId: number) => {
+    setSelectedInvoiceIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(invoiceId)) {
+        next.delete(invoiceId);
+      } else {
+        next.add(invoiceId);
+      }
+      return next;
+    });
+  };
+
+  const toggleSelectAllInvoices = () => {
+    if (selectedInvoiceIds.size === invoices.length && invoices.length > 0) {
+      setSelectedInvoiceIds(new Set());
+    } else {
+      setSelectedInvoiceIds(new Set(invoices.map((i) => i.id)));
+    }
+  };
+
+  const printSelectedInvoices = async () => {
+    const selectedInvoices = invoices.filter((i) => selectedInvoiceIds.has(i.id));
+    if (selectedInvoices.length === 0) return;
+
+    const sheetsHtml = await Promise.all(
+      selectedInvoices.map(async (invoice) => {
+        const settings = businessSettings;
+        let orderItemsHtml = '';
+        try {
+          if (invoice.orderId) {
+            const order = await orderApi.getById(invoice.orderId);
+            const items = (order as any).items || [];
+            if (items.length > 0) {
+              orderItemsHtml = `
+                <h3 style="font-size: 0.95rem; margin: 20px 0 10px; color: #374151;">Detalle de productos</h3>
+                <table style="width: 100%; border-collapse: collapse; font-size: 0.9rem;">
+                  <thead>
+                    <tr style="background-color: #f3f4f6;">
+                      <th style="border: 1px solid #e5e7eb; padding: 10px; text-align: left;">Producto</th>
+                      <th style="border: 1px solid #e5e7eb; padding: 10px; text-align: center;">Cantidad</th>
+                      <th style="border: 1px solid #e5e7eb; padding: 10px; text-align: right;">Precio unit.</th>
+                      <th style="border: 1px solid #e5e7eb; padding: 10px; text-align: right;">Subtotal</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${items.map((item: OrderItem) => `
+                      <tr>
+                        <td style="border: 1px solid #e5e7eb; padding: 10px;">${item.productName || item.offerName || 'Producto'}</td>
+                        <td style="border: 1px solid #e5e7eb; padding: 10px; text-align: center;">${item.quantity}</td>
+                        <td style="border: 1px solid #e5e7eb; padding: 10px; text-align: right;">${formatCOP(item.unitPrice || 0)}</td>
+                        <td style="border: 1px solid #e5e7eb; padding: 10px; text-align: right; font-weight: 600;">${formatCOP(item.subtotal || 0)}</td>
+                      </tr>
+                    `).join('')}
+                  </tbody>
+                </table>
+              `;
+            }
+          }
+        } catch {
+          orderItemsHtml = '';
+        }
+
+        const paymentsHtml = (invoice.payments || []).map((p: Payment) => `
+          <tr>
+            <td style="border: 1px solid #e5e7eb; padding: 10px; font-size: 0.9rem;">${p.paymentDate}</td>
+            <td style="border: 1px solid #e5e7eb; padding: 10px; font-size: 0.9rem;">${p.paymentMethod}</td>
+            <td style="border: 1px solid #e5e7eb; padding: 10px; font-size: 0.9rem; text-align: right; font-weight: 600;">${formatCOP(p.amount)}</td>
+          </tr>
+        `).join('');
+
+        return `
+          <div style="page-break-after: always; padding: 40px; max-width: 700px; margin: 0 auto; font-family: Arial, sans-serif; color: #1f2937;">
+            <div style="text-align: center; border-bottom: 2px solid #111827; padding-bottom: 20px; margin-bottom: 30px;">
+              <h1 style="margin: 0; font-size: 28px; color: #111827;">${settings.businessName || 'Mi Negocio'}</h1>
+              <p style="margin: 4px 0 0; font-size: 13px; color: #6b7280;">${settings.address || ''}</p>
+              <p style="margin: 2px 0 0; font-size: 13px; color: #6b7280;">${settings.phone || ''}</p>
+              <h2 style="margin: 16px 0 0; font-size: 18px; color: #374151; letter-spacing: 2px; text-transform: uppercase;">Factura</h2>
+            </div>
+            <div style="display: flex; justify-content: space-between; margin-bottom: 24px; font-size: 0.9rem;">
+              <div>
+                <p style="margin: 2px 0;"><strong>Factura N°:</strong> ${invoice.invoiceNumber}</p>
+                <p style="margin: 2px 0;"><strong>Fecha:</strong> ${invoice.invoiceDate}</p>
+              </div>
+              <div style="text-align: right;">
+                <p style="margin: 2px 0;"><strong>Cliente:</strong> ${invoice.customerName}</p>
+                ${invoice.customerPhone ? `<p style="margin: 2px 0;"><strong>Teléfono:</strong> ${invoice.customerPhone}</p>` : ''}
+              </div>
+            </div>
+            ${orderItemsHtml}
+            <div style="width: 300px; margin-left: auto; margin-top: 20px; font-size: 0.95rem;">
+              ${invoice.subtotal ? `
+              <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #e5e7eb;">
+                <span>Subtotal</span><strong>${formatCOP(invoice.subtotal)}</strong>
+              </div>` : ''}
+              ${invoice.taxAmount ? `
+              <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #e5e7eb;">
+                <span>Impuestos</span><strong>${formatCOP(invoice.taxAmount)}</strong>
+              </div>` : ''}
+              <div style="display: flex; justify-content: space-between; padding: 8px 0; font-size: 1.05rem; font-weight: 700; border-top: 2px solid #111827;">
+                <span>TOTAL</span><span>${formatCOP(invoice.amount)}</span>
+              </div>
+              <div style="display: flex; justify-content: space-between; padding: 6px 0; color: #047857;">
+                <span>Pagado</span><strong>${formatCOP(invoice.paid)}</strong>
+              </div>
+              <div style="display: flex; justify-content: space-between; padding: 6px 0; color: #b91c1c; font-weight: 700;">
+                <span>Saldo pendiente</span><span>${formatCOP(invoice.balance)}</span>
+              </div>
+            </div>
+            ${invoice.payments && invoice.payments.length > 0 ? `
+            <div style="margin-top: 30px;">
+              <h3 style="font-size: 0.95rem; margin-bottom: 10px; color: #374151;">Historial de pagos</h3>
+              <table style="width: 100%; border-collapse: collapse; font-size: 0.9rem;">
+                <thead>
+                  <tr style="background-color: #f9fafb;">
+                    <th style="border: 1px solid #e5e7eb; padding: 8px; text-align: left;">Fecha</th>
+                    <th style="border: 1px solid #e5e7eb; padding: 8px; text-align: left;">Método</th>
+                    <th style="border: 1px solid #e5e7eb; padding: 8px; text-align: right;">Monto</th>
+                  </tr>
+                </thead>
+                <tbody>${paymentsHtml}</tbody>
+              </table>
+            </div>` : ''}
+            <div style="margin-top: 40px; padding-top: 20px; border-top: 1px solid #e5e7eb; text-align: center; font-size: 0.8rem; color: #9ca3af;">
+              <p style="margin: 0;">Gracias por su compra.</p>
+              <p style="margin: 4px 0 0;">Esta factura es un comprobante de transacción.</p>
+            </div>
+          </div>
+        `;
+      })
+    );
+
+    const printContent = `
+      <html>
+        <head><title>Facturas (${selectedInvoices.length})</title>
+          <style>@media print { .page-break-after { page-break-after: always; } }</style>
+        </head>
+        <body style="margin: 0; padding: 0;">${sheetsHtml.join('')}</body>
+      </html>
+    `;
+    const win = window.open('', '_blank');
+    if (!win) return;
+    win.document.write(printContent);
+    win.document.close();
+    win.focus();
+    setTimeout(() => { win.print(); win.close(); }, 300);
   };
 
   const isMobileDevice = () => /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
@@ -258,9 +545,17 @@ export default function Facturacion() {
       )}
 
       <div className="card" style={{ marginBottom: '20px' }}>
-        <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-          <Search size={20} strokeWidth={1.5} color="#8b95a1" />
-          <input type="text" className="form-control" placeholder="Buscar factura..." value={search} onChange={(e) => setSearch(e.target.value)} style={{ maxWidth: '360px' }} />
+        <div style={{ display: 'flex', gap: '12px', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+            <Search size={20} strokeWidth={1.5} color="#8b95a1" />
+            <input type="text" className="form-control" placeholder="Buscar factura..." value={search} onChange={(e) => setSearch(e.target.value)} style={{ maxWidth: '360px' }} />
+          </div>
+          {selectedInvoiceIds.size > 0 && (
+            <button className="btn btn-primary" onClick={printSelectedInvoices} style={{ fontSize: '0.85rem' }}>
+              <Printer size={16} strokeWidth={1.5} style={{ marginRight: 6 }} />
+              Imprimir facturas ({selectedInvoiceIds.size})
+            </button>
+          )}
         </div>
       </div>
 
@@ -274,6 +569,15 @@ export default function Facturacion() {
             </colgroup>
             <thead>
               <tr>
+                <th style={{ width: 36, textAlign: 'center' }}>
+                  <button className="navbar-icon-btn" aria-label="Seleccionar todos" onClick={toggleSelectAllInvoices} style={{ padding: 2 }}>
+                    {selectedInvoiceIds.size === invoices.length && invoices.length > 0 ? (
+                      <CheckSquare size={18} strokeWidth={1.5} color="#4f46e5" />
+                    ) : (
+                      <Square size={18} strokeWidth={1.5} color="#8b95a1" />
+                    )}
+                  </button>
+                </th>
                 <th>Factura</th><th>Cliente</th><th>Fecha</th>
                 <th style={{ textAlign: 'right' }}>Monto total</th>
                 <th style={{ textAlign: 'right' }}>Pagado</th>
@@ -284,13 +588,23 @@ export default function Facturacion() {
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={8} style={{ textAlign: 'center', padding: '40px 16px', color: 'var(--color-text-muted)' }}>Cargando facturas...</td></tr>
+                <tr><td colSpan={9} style={{ textAlign: 'center', padding: '40px 16px', color: 'var(--color-text-muted)' }}>Cargando facturas...</td></tr>
               ) : invoices.map((f) => {
                 const st = statusConfig(f.status);
                 const StatusIcon = st.icon;
                 const progress = f.amount > 0 ? (f.paid / f.amount) * 100 : 0;
+                const isSelected = selectedInvoiceIds.has(f.id);
                 return (
                   <tr key={f.id}>
+                    <td style={{ textAlign: 'center' }}>
+                      <button className="navbar-icon-btn" aria-label="Seleccionar" onClick={() => toggleSelectInvoice(f.id)} style={{ padding: 2 }}>
+                        {isSelected ? (
+                          <CheckSquare size={18} strokeWidth={1.5} color="#4f46e5" />
+                        ) : (
+                          <Square size={18} strokeWidth={1.5} color="#8b95a1" />
+                        )}
+                      </button>
+                    </td>
                     <td>
                       <strong style={{ fontSize: '0.86rem', letterSpacing: '-0.2px' }}>{f.invoiceNumber}</strong>
                       {f.orderNumber && (
@@ -324,7 +638,7 @@ export default function Facturacion() {
                     </td>
                     <td className="actions">
                       <div style={{ display: 'inline-flex', gap: 8 }}>
-                        <button className="navbar-icon-btn" aria-label="Ver detalle" onClick={() => setSelectedInvoice(f)} style={{ padding: 6, borderRadius: 8, backgroundColor: 'var(--color-bg)' }}>
+                        <button className="navbar-icon-btn" aria-label="Ver detalle" onClick={() => { setSelectedInvoice(f); if (f.orderId) { orderApi.getById(f.orderId).then((o) => setSelectedInvoiceOrder(o)).catch(() => setSelectedInvoiceOrder(null)); } else { setSelectedInvoiceOrder(null); } }} style={{ padding: 6, borderRadius: 8, backgroundColor: 'var(--color-bg)' }}>
                           <Eye size={15} strokeWidth={1.5} />
                         </button>
                         {f.status !== 'PAGADA' && canCreateInvoice() && (
@@ -343,7 +657,7 @@ export default function Facturacion() {
                 );
               })}
               {!loading && invoices.length === 0 && (
-                <tr><td colSpan={8} style={{ textAlign: 'center', color: 'var(--color-text-muted)', padding: '40px 16px' }}>No se encontraron facturas</td></tr>
+                <tr><td colSpan={9} style={{ textAlign: 'center', color: 'var(--color-text-muted)', padding: '40px 16px' }}>No se encontraron facturas</td></tr>
               )}
             </tbody>
           </table>
@@ -494,11 +808,51 @@ export default function Facturacion() {
                 <span style={{ color: 'var(--color-text-secondary)' }}>Método de pago del pedido: <strong>{selectedInvoice.paymentMethod}</strong></span>
               </div>
             )}
+            {selectedInvoiceOrder?.deliveryPersonName && (
+              <div style={{ padding: '12px 14px', borderRadius: 'var(--radius-md)', backgroundColor: '#fef2f2', marginBottom: 16, fontSize: '0.88rem', display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Truck size={16} strokeWidth={1.5} color="#b45309" />
+                <span style={{ color: 'var(--color-text-secondary)' }}>Domiciliario: <strong style={{ color: '#b45309' }}>{selectedInvoiceOrder.deliveryPersonName}</strong></span>
+              </div>
+            )}
+
+            {selectedInvoiceOrder && selectedInvoiceOrder.items && selectedInvoiceOrder.items.length > 0 && (
+              <div style={{ marginBottom: 20 }}>
+                <div style={{ marginBottom: 10, fontSize: '0.88rem', fontWeight: 700, color: 'var(--color-text)' }}>Productos facturados</div>
+                <div style={{ border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
+                    <thead>
+                      <tr style={{ backgroundColor: 'var(--color-bg)' }}>
+                        <th style={{ padding: '10px 12px', textAlign: 'left', fontWeight: 700, color: 'var(--color-text)', borderBottom: '1px solid var(--color-border)' }}>Producto</th>
+                        <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 700, color: 'var(--color-text)', borderBottom: '1px solid var(--color-border)' }}>Cant.</th>
+                        <th style={{ padding: '10px 12px', textAlign: 'right', fontWeight: 700, color: 'var(--color-text)', borderBottom: '1px solid var(--color-border)' }}>V. Unit.</th>
+                        <th style={{ padding: '10px 12px', textAlign: 'right', fontWeight: 700, color: 'var(--color-text)', borderBottom: '1px solid var(--color-border)' }}>Total</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {selectedInvoiceOrder.items.map((item: OrderItem, idx: number) => (
+                        <tr key={idx} style={{ borderBottom: '1px solid var(--color-border)' }}>
+                          <td style={{ padding: '10px 12px', color: 'var(--color-text-secondary)' }}>{item.productName || item.offerName || 'Producto'}</td>
+                          <td style={{ padding: '10px 12px', textAlign: 'center', fontFamily: 'ui-monospace, monospace' }}>{item.quantity}</td>
+                          <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: 'ui-monospace, monospace' }}>{formatCOP(item.unitPrice || 0)}</td>
+                          <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: 'ui-monospace, monospace', fontWeight: 600 }}>{formatCOP(item.subtotal || 0)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr style={{ backgroundColor: 'var(--color-bg)' }}>
+                        <td colSpan={3} style={{ padding: '10px 12px', textAlign: 'right', fontWeight: 700 }}>Total</td>
+                        <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: 'ui-monospace, monospace', fontWeight: 800 }}>{formatCOP(selectedInvoiceOrder.totalAmount)}</td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              </div>
+            )}
 
             {/* Actions inside detail modal */}
             <div style={{ display: 'flex', gap: 10, marginBottom: 20, flexWrap: 'wrap' }}>
               <button className="btn btn-outline" style={{ flex: 1, justifyContent: 'center', minWidth: 120 }} onClick={() => setSelectedInvoice(null)}>Cerrar</button>
-              <button className="btn btn-primary" style={{ flex: 1, justifyContent: 'center', minWidth: 120, backgroundColor: '#7c3aed' }} onClick={() => window.print()}>
+              <button className="btn btn-primary" style={{ flex: 1, justifyContent: 'center', minWidth: 120, backgroundColor: '#7c3aed' }} onClick={() => printInvoice(selectedInvoice)}>
                 <Printer size={16} strokeWidth={1.5} /> Imprimir
               </button>
               <button className="btn btn-primary" style={{ flex: 1, justifyContent: 'center', minWidth: 120, backgroundColor: '#10b981' }} onClick={() => selectedInvoice && handleSendWhatsAppAuto(selectedInvoice)} disabled={!!selectedInvoice && sendingIds.has(selectedInvoice.id)}>

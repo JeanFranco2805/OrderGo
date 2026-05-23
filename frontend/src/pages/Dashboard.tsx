@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   DollarSign, ShoppingCart, Users, Package, Receipt, BarChart3, Layers,
-  MapPin, Clock, CheckCircle2, Truck, Navigation, Eye, Phone
+  MapPin, Clock, CheckCircle2, Truck, Navigation, Eye, Phone, Briefcase, AlertTriangle
 } from 'lucide-react';
 import { formatCOP } from '../utils/currency';
 import { dashboardApi, type VendorStats } from '../services/dashboardService';
@@ -11,6 +11,7 @@ import { useApiCache, invalidateCache } from '../hooks/useApiCache';
 import { useRole } from '../hooks/useRole';
 import Pagination from '../components/Pagination';
 import Modal from '../components/Modal';
+import RejectionModal, { type RejectItem } from '../components/RejectionModal';
 import '../styles/pages.css';
 
 export default function Dashboard() {
@@ -36,6 +37,13 @@ export default function Dashboard() {
   const [pendingPage, setPendingPage] = useState(0);
   const pendingPageSize = 10;
 
+  // Rejection modal
+  const [showRejectModal, setShowRejectModal] = useState(false);
+  const [rejectOrderId, setRejectOrderId] = useState<number | null>(null);
+  const [rejectPreviousStatus, setRejectPreviousStatus] = useState('');
+  const [rejectItems, setRejectItems] = useState<RejectItem[]>([]);
+  const [rejectingId, setRejectingId] = useState<number | null>(null);
+
   const handleDeliver = async (id: number) => {
     setDeliveringId(id);
     setDeliverError('');
@@ -49,6 +57,36 @@ export default function Dashboard() {
       setDeliverError(e?.response?.data?.message || 'Error al marcar como entregado');
     } finally {
       setDeliveringId(null);
+    }
+  };
+
+  const handleRejectDelivery = async (order: Order) => {
+    setRejectingId(order.id);
+    setDeliverError('');
+    try {
+      await orderApi.updateStatus(order.id, 'RECHAZADO');
+      invalidateCache('pending-deliveries');
+      invalidateCache('dashboard-stats');
+      invalidateCache('products-');
+      refreshPending();
+
+      setRejectOrderId(order.id);
+      setRejectPreviousStatus(order.status);
+      setRejectItems(
+        order.items.map((item) => ({
+          productId: item.productId,
+          offerId: item.offerId,
+          productName: item.productName || item.offerName || 'Producto',
+          quantity: item.quantity,
+          maxQuantity: item.quantity,
+          checked: true,
+        }))
+      );
+      setShowRejectModal(true);
+    } catch (e: any) {
+      setDeliverError(e?.response?.data?.message || 'Error al marcar como rechazado');
+    } finally {
+      setRejectingId(null);
     }
   };
 
@@ -71,6 +109,7 @@ export default function Dashboard() {
     { label: 'Pedidos hoy', value: vendorStats ? String(vendorStats.totalOrders) : '—', icon: ShoppingCart, color: '#0ea5e9', bg: '#f0f9ff' },
     { label: 'Promedio por pedido (hoy)', value: vendorStats ? `${vendorStats.averageDozensPerOrder} docenas` : '—', icon: Package, color: '#f59e0b', bg: '#fffbeb' },
     { label: 'Clientes atendidos (hoy)', value: vendorStats ? String(vendorStats.totalCustomers) : '—', icon: Users, color: '#10b981', bg: '#ecfdf5' },
+    { label: 'Mi cargue', value: 'Ver cargue', icon: Briefcase, color: '#7c3aed', bg: '#f3f0ff', onClick: () => navigate('/cargue'), isAction: true },
   ];
 
   const allTimeCards = [
@@ -113,15 +152,29 @@ export default function Dashboard() {
       {isVendedor ? (
         <>
           <div className="stats-grid">
-            {vendorTodayCards.map((s) => (
-              <div className="stat-card" key={s.label}>
-                <div className="stat-info">
-                  <span className="stat-label">{s.label}</span>
-                  <span className="stat-value">{loadingVendorStats ? '...' : s.value}</span>
-                </div>
-                <div className="stat-icon" style={{ backgroundColor: s.bg, color: s.color }}>
-                  <s.icon size={20} strokeWidth={1.5} />
-                </div>
+            {vendorTodayCards.map((s: any) => (
+              <div className="stat-card" key={s.label} style={s.onClick ? { cursor: 'pointer' } : undefined}>
+                {s.onClick ? (
+                  <button onClick={s.onClick} style={{ all: 'unset', display: 'flex', width: '100%', gap: 16, alignItems: 'center', cursor: 'pointer' }}>
+                    <div className="stat-info" style={{ flex: 1 }}>
+                      <span className="stat-label">{s.label}</span>
+                      <span className="stat-value">{loadingVendorStats ? '...' : s.value}</span>
+                    </div>
+                    <div className="stat-icon" style={{ backgroundColor: s.bg, color: s.color }}>
+                      <s.icon size={20} strokeWidth={1.5} />
+                    </div>
+                  </button>
+                ) : (
+                  <>
+                    <div className="stat-info">
+                      <span className="stat-label">{s.label}</span>
+                      <span className="stat-value">{loadingVendorStats ? '...' : s.value}</span>
+                    </div>
+                    <div className="stat-icon" style={{ backgroundColor: s.bg, color: s.color }}>
+                      <s.icon size={20} strokeWidth={1.5} />
+                    </div>
+                  </>
+                )}
               </div>
             ))}
           </div>
@@ -238,6 +291,15 @@ export default function Dashboard() {
                               <CheckCircle2 size={14} strokeWidth={1.5} />
                               {deliveringId === o.id ? 'Entregando...' : 'Entregar'}
                             </button>
+                            <button
+                              className="btn btn-danger"
+                              style={{ padding: '6px 10px', fontSize: '0.8rem', gap: 6 }}
+                              onClick={() => handleRejectDelivery(o)}
+                              disabled={rejectingId === o.id}
+                            >
+                              <AlertTriangle size={14} strokeWidth={1.5} />
+                              {rejectingId === o.id ? 'Rechazando...' : 'Rechazar'}
+                            </button>
                           </div>
                         </td>
                       </tr>
@@ -297,6 +359,24 @@ export default function Dashboard() {
           </div>
         )}
       </Modal>
+
+      {/* Modal Registrar Rechazo */}
+      <RejectionModal
+        isOpen={showRejectModal}
+        onClose={() => setShowRejectModal(false)}
+        orderId={rejectOrderId}
+        previousStatus={rejectPreviousStatus}
+        items={rejectItems}
+        onItemsChange={setRejectItems}
+        onSuccess={() => {
+          setDeliverError('');
+          invalidateCache('pending-deliveries');
+          invalidateCache('dashboard-stats');
+          invalidateCache('seller-load-');
+          refreshPending();
+        }}
+        onError={(msg) => setDeliverError(msg)}
+      />
     </div>
   );
 }

@@ -1,17 +1,22 @@
 import { useState, useEffect } from 'react';
-import { Plus, Search, Eye, MapPin, FileText, Trash2, X, Pencil, CreditCard, Tag } from 'lucide-react';
+import { Plus, Search, Eye, MapPin, FileText, Trash2, X, Pencil, CreditCard, Tag, Truck, Printer, CheckSquare, Square, Download } from 'lucide-react';
 import { formatCOP } from '../utils/currency';
+import { getLocalDateString } from '../utils/date';
 import { orderApi, type Order, type OrderItem } from '../services/orderService';
 import { customerApi, type Customer } from '../services/customerService';
 import { productApi, type Product } from '../services/productService';
 import { offerApi, type Offer } from '../services/offerService';
+import { userApi, type User } from '../services/userService';
 import { invoiceApi } from '../services/invoiceService';
+import { businessSettingsApi } from '../services/businessSettingsService';
 import { getPaymentMethods } from '../services/paymentMethodService';
 import { useApiCache, invalidateCache } from '../hooks/useApiCache';
 import { useRole } from '../hooks/useRole';
+import { exportToExcel } from '../utils/exportExcel';
 import Pagination from '../components/Pagination';
 import Modal from '../components/Modal';
 import ConfirmModal from '../components/ConfirmModal';
+import RejectionModal, { type RejectItem } from '../components/RejectionModal';
 import '../styles/pages.css';
 
 function statusDisplay(s: string) {
@@ -19,13 +24,14 @@ function statusDisplay(s: string) {
     case 'ENTREGADO': return { label: 'Entregado', class: 'badge-success' };
     case 'EN_PREPARACION': return { label: 'En preparación', class: 'badge-warning' };
     case 'PENDIENTE': return { label: 'Pendiente', class: 'badge-info' };
-    case 'CANCELADO': return { label: 'Cancelado', class: 'badge-danger' };
+    case 'RECHAZADO': return { label: 'Rechazado', class: 'badge-danger' };
+    case 'CANCELADO': return { label: 'Cancelado', class: 'badge-secondary' };
     default: return { label: s, class: 'badge-info' };
   }
 }
 
 export default function Pedidos() {
-  const { canCreate: canCreateOrder, canEdit: canEditOrder, canForceDelete: canForceDeleteOrder } = useRole();
+  const { canCreate: canCreateOrder, canEdit: canEditOrder, canForceDelete: canForceDeleteOrder, isAdmin, isDomiciliario } = useRole();
 
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(0);
@@ -47,6 +53,7 @@ export default function Pedidos() {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [offers, setOffers] = useState<Offer[]>([]);
+  const [users, setUsers] = useState<User[]>([]);
   const [createCustomerId, setCreateCustomerId] = useState<number | ''>('');
   const [createPaymentMethod, setCreatePaymentMethod] = useState('');
   const [createItems, setCreateItems] = useState<{ type: 'product' | 'offer'; id?: number; quantity: number }[]>([]);
@@ -58,10 +65,35 @@ export default function Pedidos() {
   const [editCustomerId, setEditCustomerId] = useState<number | ''>('');
   const [editPaymentMethod, setEditPaymentMethod] = useState('');
   const [editStatus, setEditStatus] = useState('');
+  const [editDeliveryPersonId, setEditDeliveryPersonId] = useState<number | ''>('');
   const [editLoading, setEditLoading] = useState(false);
+
+  // Rejection modal
+  const [showRejectModal, setShowRejectModal] = useState(false);
+  const [rejectOrderId, setRejectOrderId] = useState<number | null>(null);
+  const [rejectPreviousStatus, setRejectPreviousStatus] = useState('');
+  const [rejectItems, setRejectItems] = useState<RejectItem[]>([]);
 
   // Invoice from order
   const [invoiceOrder, setInvoiceOrder] = useState<Order | null>(null);
+
+  // Selected orders for batch print
+  const [selectedOrderIds, setSelectedOrderIds] = useState<Set<number>>(new Set());
+
+  const [businessSettings, setBusinessSettings] = useState<{ businessName?: string }>({});
+
+  useEffect(() => {
+    businessSettingsApi.get()
+      .then((s) => setBusinessSettings(s))
+      .catch(() => setBusinessSettings({}));
+  }, []);
+
+  // Load customers once on mount to avoid blocking the edit modal
+  useEffect(() => {
+    customerApi.getAll({ size: 1000 })
+      .then((cData) => setCustomers(cData.content))
+      .catch(() => setCustomers([]));
+  }, []);
 
   useEffect(() => {
     const timer = setTimeout(() => setPage(0), 400);
@@ -74,12 +106,10 @@ export default function Pedidos() {
     setCreatePaymentMethod('');
     setCreateItems([]);
     try {
-      const [cData, pData, oData] = await Promise.all([
-        customerApi.getAll({ size: 1000 }),
+      const [pData, oData] = await Promise.all([
         productApi.getAll({ size: 1000 }),
         offerApi.getAll({ size: 1000 }),
       ]);
-      setCustomers(cData.content);
       setProducts(pData.content);
       setOffers(oData.content.filter((o) => o.active));
     } catch (err) {
@@ -130,33 +160,63 @@ export default function Pedidos() {
     }
   };
 
-  const openEdit = async (order: Order) => {
+  const openEdit = (order: Order) => {
     setEditOrderId(order.id);
     setEditCustomerId(order.customerId);
     setEditPaymentMethod(order.paymentMethod || '');
     setEditStatus(order.status);
+    setEditDeliveryPersonId(order.deliveryPersonId || '');
     setShowEdit(true);
-    try {
-      const cData = await customerApi.getAll({ size: 1000 });
-      setCustomers(cData.content);
-    } catch (err) {
-      setErrorModal('Error cargando clientes: ' + (err as Error).message);
+    // Load users if not already loaded
+    if (users.length === 0) {
+      userApi.getAll({ size: 1000 })
+        .then((uData) => setUsers(uData.content))
+        .catch(() => setUsers([]));
     }
   };
 
   const handleEditSave = async () => {
     if (!editOrderId) return;
+    if ((editStatus === 'ENTREGADO' || editStatus === 'RECHAZADO') && editDeliveryPersonId === '') {
+      setErrorModal('Debes asignar un domiciliario antes de marcar el pedido como Entregado o Rechazado.');
+      return;
+    }
     try {
       setEditLoading(true);
-      await orderApi.update(editOrderId, {
+      const payload: any = {
         customerId: Number(editCustomerId),
         status: editStatus,
         paymentMethod: editPaymentMethod || undefined,
-      });
+      };
+      if (editDeliveryPersonId !== '') {
+        payload.deliveryPersonId = Number(editDeliveryPersonId);
+      }
+      await orderApi.update(editOrderId, payload);
       setShowEdit(false);
       invalidateCache('orders-');
       invalidateCache('products-');
+      invalidateCache('seller-load-');
       refresh();
+
+      // If status changed to RECHAZADO, open rejection modal
+      if (editStatus === 'RECHAZADO') {
+        const order = orders.find((o) => o.id === editOrderId);
+        if (order) {
+          setRejectOrderId(editOrderId);
+          setRejectPreviousStatus(order.status);
+          setRejectItems(
+            order.items.map((item) => ({
+              productId: item.productId,
+              offerId: item.offerId,
+              productName: item.productName || item.offerName || 'Producto',
+              quantity: item.quantity,
+              maxQuantity: item.quantity,
+              checked: true,
+            }))
+          );
+          setShowRejectModal(true);
+        }
+      }
     } catch (err) {
       setErrorModal('Error guardando: ' + (err as Error).message);
     } finally {
@@ -169,7 +229,7 @@ export default function Pedidos() {
     try {
       await invoiceApi.create({
         customerId: invoiceOrder.customerId,
-        invoiceDate: new Date().toISOString().split('T')[0],
+        invoiceDate: getLocalDateString(),
         amount: invoiceOrder.totalAmount,
         orderId: invoiceOrder.id,
       });
@@ -180,6 +240,208 @@ export default function Pedidos() {
     }
   };
 
+  const handleTakeOrder = async (order: Order) => {
+    try {
+      await orderApi.update(order.id, {
+        customerId: order.customerId,
+        status: 'EN_PREPARACION',
+      });
+      invalidateCache('orders-');
+      refresh();
+      setErrorModal('Pedido asignado y agregado a tu cargue exitosamente.');
+    } catch (err) {
+      setErrorModal('Error tomando pedido: ' + (err as Error).message);
+    }
+  };
+
+  const printDeliveryNote = (order: Order | null) => {
+    if (!order) return;
+    const printContent = `
+      <html>
+        <head><title>Nota de Entrega - ${order.orderNumber}</title></head>
+        <body style="font-family: Arial, sans-serif; padding: 40px; max-width: 600px; margin: 0 auto;">
+          <div style="text-align: center; border-bottom: 2px solid #333; padding-bottom: 20px; margin-bottom: 30px;">
+            <h1 style="margin: 0; font-size: 24px;">${businessSettings.businessName || 'Mi Negocio'}</h1>
+            <h2 style="margin: 8px 0 0; font-size: 16px; color: #555;">NOTA DE ENTREGA</h2>
+          </div>
+          
+          <div style="margin-bottom: 20px;">
+            <p style="margin: 4px 0;"><strong>Pedido:</strong> ${order.orderNumber}</p>
+            <p style="margin: 4px 0;"><strong>Cliente:</strong> ${order.customerName}</p>
+            <p style="margin: 4px 0;"><strong>Dirección:</strong> ${order.deliveryAddress || '—'}</p>
+            <p style="margin: 4px 0;"><strong>Fecha:</strong> ${new Date().toLocaleDateString('es-CO')}</p>
+          </div>
+          
+          <table style="width: 100%; border-collapse: collapse; margin: 20px 0;">
+            <thead>
+              <tr style="background-color: #f3f4f6;">
+                <th style="border: 1px solid #ccc; padding: 10px; text-align: left;">Producto</th>
+                <th style="border: 1px solid #ccc; padding: 10px; text-align: center;">Cantidad</th>
+                <th style="border: 1px solid #ccc; padding: 10px; text-align: right;">Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${order.items.map((item: OrderItem) => `
+                <tr>
+                  <td style="border: 1px solid #ccc; padding: 10px;">${item.productName || item.offerName || 'Producto'}</td>
+                  <td style="border: 1px solid #ccc; padding: 10px; text-align: center;">${item.quantity}</td>
+                  <td style="border: 1px solid #ccc; padding: 10px; text-align: right;">${formatCOP(item.subtotal || 0)}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+            <tfoot>
+              <tr style="font-weight: bold; background-color: #f9fafb;">
+                <td colspan="2" style="border: 1px solid #ccc; padding: 10px; text-align: right;">TOTAL:</td>
+                <td style="border: 1px solid #ccc; padding: 10px; text-align: right;">${formatCOP(order.totalAmount)}</td>
+              </tr>
+            </tfoot>
+          </table>
+          
+          <div style="margin-top: 40px; display: flex; justify-content: space-between;">
+            <div style="width: 45%; border-top: 1px solid #333; padding-top: 8px;">
+              <p style="text-align: center; font-size: 14px; margin: 0;">Firma del Cliente</p>
+              <p style="text-align: center; font-size: 12px; margin: 16px 0 0; color: #666;">C.C. _______________________</p>
+            </div>
+            <div style="width: 45%; border-top: 1px solid #333; padding-top: 8px;">
+              <p style="text-align: center; font-size: 14px; margin: 0;">Firma del Domiciliario</p>
+            </div>
+          </div>
+          
+          <div style="margin-top: 30px; padding: 15px; background-color: #f9fafb; border-radius: 8px; font-size: 12px; color: #666;">
+            <p style="margin: 0;"><strong>Nota:</strong> Por favor verifique que los productos estén en buen estado antes de firmar. Los rechazos deben ser notificados inmediatamente.</p>
+          </div>
+        </body>
+      </html>
+    `;
+    const win = window.open('', '_blank');
+    if (!win) return;
+    win.document.write(printContent);
+    win.document.close();
+    win.focus();
+    setTimeout(() => { win.print(); win.close(); }, 300);
+  };
+
+  const toggleSelectOrder = (orderId: number) => {
+    setSelectedOrderIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(orderId)) {
+        next.delete(orderId);
+      } else {
+        next.add(orderId);
+      }
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedOrderIds.size === orders.length && orders.length > 0) {
+      setSelectedOrderIds(new Set());
+    } else {
+      setSelectedOrderIds(new Set(orders.map((o) => o.id)));
+    }
+  };
+
+  const handleExport = async () => {
+    try {
+      const all = (await orderApi.getAll({ search: search || undefined, size: 1000 })).content;
+      const rows = all.map((o) => [
+        o.orderNumber,
+        o.customerName || `Cliente #${o.customerId}`,
+        o.deliveryAddress || '',
+        o.totalAmount,
+        o.paymentMethod || '',
+        o.status,
+        o.deliveryPersonName || '',
+      ]);
+      exportToExcel(
+        [
+          {
+            name: 'Pedidos',
+            headers: ['Número', 'Cliente', 'Dirección', 'Total', 'Método de pago', 'Estado', 'Domiciliario'],
+            rows,
+          },
+        ],
+        `pedidos_ordergo_${getLocalDateString()}.xlsx`
+      );
+    } catch {
+      setErrorModal('Error exportando pedidos');
+    }
+  };
+
+  const printSelectedDeliveryNotes = () => {
+    const selectedOrders = orders.filter((o) => selectedOrderIds.has(o.id));
+    if (selectedOrders.length === 0) return;
+
+    const notesHtml = selectedOrders.map((order) => `
+      <div style="page-break-after: always; padding: 40px; max-width: 600px; margin: 0 auto; font-family: Arial, sans-serif;">
+        <div style="text-align: center; border-bottom: 2px solid #333; padding-bottom: 20px; margin-bottom: 30px;">
+          <h1 style="margin: 0; font-size: 24px;">${businessSettings.businessName || 'Mi Negocio'}</h1>
+          <h2 style="margin: 8px 0 0; font-size: 16px; color: #555;">NOTA DE ENTREGA</h2>
+        </div>
+        <div style="margin-bottom: 20px;">
+          <p style="margin: 4px 0;"><strong>Pedido:</strong> ${order.orderNumber}</p>
+          <p style="margin: 4px 0;"><strong>Cliente:</strong> ${order.customerName}</p>
+          <p style="margin: 4px 0;"><strong>Dirección:</strong> ${order.deliveryAddress || '—'}</p>
+          <p style="margin: 4px 0;"><strong>Fecha:</strong> ${new Date().toLocaleDateString('es-CO')}</p>
+          ${order.deliveryPersonName ? `<p style="margin: 4px 0;"><strong>Domiciliario:</strong> ${order.deliveryPersonName}</p>` : ''}
+        </div>
+        <table style="width: 100%; border-collapse: collapse; margin: 20px 0;">
+          <thead>
+            <tr style="background-color: #f3f4f6;">
+              <th style="border: 1px solid #ccc; padding: 10px; text-align: left;">Producto</th>
+              <th style="border: 1px solid #ccc; padding: 10px; text-align: center;">Cantidad</th>
+              <th style="border: 1px solid #ccc; padding: 10px; text-align: right;">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${order.items.map((item: OrderItem) => `
+              <tr>
+                <td style="border: 1px solid #ccc; padding: 10px;">${item.productName || item.offerName || 'Producto'}</td>
+                <td style="border: 1px solid #ccc; padding: 10px; text-align: center;">${item.quantity}</td>
+                <td style="border: 1px solid #ccc; padding: 10px; text-align: right;">${formatCOP(item.subtotal || 0)}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+          <tfoot>
+            <tr style="font-weight: bold; background-color: #f9fafb;">
+              <td colspan="2" style="border: 1px solid #ccc; padding: 10px; text-align: right;">TOTAL:</td>
+              <td style="border: 1px solid #ccc; padding: 10px; text-align: right;">${formatCOP(order.totalAmount)}</td>
+            </tr>
+          </tfoot>
+        </table>
+        <div style="margin-top: 40px; display: flex; justify-content: space-between;">
+          <div style="width: 45%; border-top: 1px solid #333; padding-top: 8px;">
+            <p style="text-align: center; font-size: 14px; margin: 0;">Firma del Cliente</p>
+            <p style="text-align: center; font-size: 12px; margin: 16px 0 0; color: #666;">C.C. _______________________</p>
+          </div>
+          <div style="width: 45%; border-top: 1px solid #333; padding-top: 8px;">
+            <p style="text-align: center; font-size: 14px; margin: 0;">Firma del Domiciliario</p>
+          </div>
+        </div>
+        <div style="margin-top: 30px; padding: 15px; background-color: #f9fafb; border-radius: 8px; font-size: 12px; color: #666;">
+          <p style="margin: 0;"><strong>Nota:</strong> Por favor verifique que los productos estén en buen estado antes de firmar. Los rechazos deben ser notificados inmediatamente.</p>
+        </div>
+      </div>
+    `).join('');
+
+    const printContent = `
+      <html>
+        <head><title>Notas de Entrega (${selectedOrders.length})</title>
+          <style>@media print { .page-break-after { page-break-after: always; } }</style>
+        </head>
+        <body style="margin: 0; padding: 0;">
+          ${notesHtml}
+        </body>
+      </html>
+    `;
+    const win = window.open('', '_blank');
+    if (!win) return;
+    win.document.write(printContent);
+    win.document.close();
+    win.focus();
+    setTimeout(() => { win.print(); win.close(); }, 300);
+  };
+
   return (
     <div>
       <div className="page-header">
@@ -187,11 +449,18 @@ export default function Pedidos() {
           <h1>Pedidos</h1>
           <p>Administra los pedidos del negocio</p>
         </div>
-        {canCreateOrder() && (
-          <button className="btn btn-primary" onClick={openCreate}>
-            <Plus size={18} strokeWidth={1.5} /> Nuevo pedido
-          </button>
-        )}
+        <div style={{ display: 'flex', gap: 10 }}>
+          {isAdmin && (
+            <button className="btn btn-outline" onClick={handleExport}>
+              <Download size={18} strokeWidth={1.5} /> Exportar Excel
+            </button>
+          )}
+          {canCreateOrder() && (
+            <button className="btn btn-primary" onClick={openCreate}>
+              <Plus size={18} strokeWidth={1.5} /> Nuevo pedido
+            </button>
+          )}
+        </div>
       </div>
 
       {error && (
@@ -201,16 +470,24 @@ export default function Pedidos() {
       )}
 
       <div className="card" style={{ marginBottom: '20px' }}>
-        <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-          <Search size={20} strokeWidth={1.5} color="#8b95a1" />
-          <input
-            type="text"
-            className="form-control"
-            placeholder="Buscar pedido..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            style={{ maxWidth: '320px' }}
-          />
+        <div style={{ display: 'flex', gap: '12px', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+            <Search size={20} strokeWidth={1.5} color="#8b95a1" />
+            <input
+              type="text"
+              className="form-control"
+              placeholder="Buscar pedido..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              style={{ maxWidth: '320px' }}
+            />
+          </div>
+          {selectedOrderIds.size > 0 && (
+            <button className="btn btn-primary" onClick={printSelectedDeliveryNotes} style={{ fontSize: '0.85rem' }}>
+              <Printer size={16} strokeWidth={1.5} style={{ marginRight: 6 }} />
+              Imprimir entregas ({selectedOrderIds.size})
+            </button>
+          )}
         </div>
       </div>
 
@@ -219,6 +496,15 @@ export default function Pedidos() {
           <table className="data-table">
             <thead>
               <tr>
+                <th style={{ width: 36, textAlign: 'center' }}>
+                  <button className="navbar-icon-btn" aria-label="Seleccionar todos" onClick={toggleSelectAll} style={{ padding: 2 }}>
+                    {selectedOrderIds.size === orders.length && orders.length > 0 ? (
+                      <CheckSquare size={18} strokeWidth={1.5} color="#4f46e5" />
+                    ) : (
+                      <Square size={18} strokeWidth={1.5} color="#8b95a1" />
+                    )}
+                  </button>
+                </th>
                 <th>Pedido</th>
                 <th>Cliente</th>
                 <th>Total</th>
@@ -229,17 +515,32 @@ export default function Pedidos() {
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={6} style={{ textAlign: 'center', padding: 40, color: 'var(--color-text-muted)' }}>Cargando pedidos...</td></tr>
+                <tr><td colSpan={7} style={{ textAlign: 'center', padding: 40, color: 'var(--color-text-muted)' }}>Cargando pedidos...</td></tr>
               ) : orders.map((o) => {
                 const st = statusDisplay(o.status);
+                const isSelected = selectedOrderIds.has(o.id);
                 return (
                   <tr key={o.id}>
+                    <td style={{ textAlign: 'center' }}>
+                      <button className="navbar-icon-btn" aria-label="Seleccionar" onClick={() => toggleSelectOrder(o.id)} style={{ padding: 2 }}>
+                        {isSelected ? (
+                          <CheckSquare size={18} strokeWidth={1.5} color="#4f46e5" />
+                        ) : (
+                          <Square size={18} strokeWidth={1.5} color="#8b95a1" />
+                        )}
+                      </button>
+                    </td>
                     <td><strong>{o.orderNumber}</strong></td>
                     <td>
                       <div>{o.customerName || `Cliente #${o.customerId}`}</div>
                       {o.deliveryAddress && (
                         <div style={{ fontSize: '0.78rem', color: 'var(--color-text-muted)', display: 'flex', alignItems: 'center', gap: 4, marginTop: 2 }}>
                           <MapPin size={11} strokeWidth={1.5} /> {o.deliveryAddress}
+                        </div>
+                      )}
+                      {o.deliveryPersonName && (
+                        <div style={{ fontSize: '0.75rem', color: '#b45309', display: 'flex', alignItems: 'center', gap: 4, marginTop: 2, fontWeight: 600 }}>
+                          <Truck size={11} strokeWidth={1.5} /> {o.deliveryPersonName}
                         </div>
                       )}
                     </td>
@@ -255,6 +556,10 @@ export default function Pedidos() {
                     <td style={{ textAlign: 'right' }}>
                       <div style={{ display: 'inline-flex', gap: 8 }}>
                         <button className="navbar-icon-btn" aria-label="Ver" onClick={() => setSelectedOrder(o)}><Eye size={16} strokeWidth={1.5} /></button>
+                        <button className="navbar-icon-btn" aria-label="Imprimir nota" onClick={() => printDeliveryNote(o)} style={{ color: '#0d9488' }}><Printer size={16} strokeWidth={1.5} /></button>
+                        {useRole().isDomiciliario && !o.deliveryPersonId && (o.status === 'PENDIENTE' || o.status === 'EN_PREPARACION') && (
+                          <button className="navbar-icon-btn" aria-label="Tomar pedido" onClick={() => handleTakeOrder(o)} style={{ color: '#4f46e5', backgroundColor: '#eef2ff', borderRadius: 8, padding: 6 }}><Truck size={16} strokeWidth={1.5} /></button>
+                        )}
                         {canEditOrder() && (
                           <button className="navbar-icon-btn" aria-label="Editar" onClick={() => openEdit(o)}><Pencil size={16} strokeWidth={1.5} /></button>
                         )}
@@ -270,7 +575,7 @@ export default function Pedidos() {
                 );
               })}
               {!loading && orders.length === 0 && (
-                <tr><td colSpan={6} style={{ textAlign: 'center', color: '#8b95a1' }}>No se encontraron pedidos</td></tr>
+                <tr><td colSpan={7} style={{ textAlign: 'center', color: '#8b95a1' }}>No se encontraron pedidos</td></tr>
               )}
             </tbody>
           </table>
@@ -320,6 +625,12 @@ export default function Pedidos() {
                 <span style={{ color: 'var(--color-text-secondary)' }}><strong>Método de pago:</strong> {selectedOrder.paymentMethod}</span>
               </div>
             )}
+            {selectedOrder.deliveryPersonName && (
+              <div style={{ padding: '12px 14px', borderRadius: 'var(--radius-md)', backgroundColor: '#fffbeb', display: 'flex', alignItems: 'center', gap: 10, fontSize: '0.88rem' }}>
+                <Truck size={16} strokeWidth={1.5} color="#b45309" />
+                <span style={{ color: 'var(--color-text-secondary)' }}><strong>Domiciliario:</strong> {selectedOrder.deliveryPersonName}</span>
+              </div>
+            )}
             <div>
               <div style={{ fontSize: '0.88rem', fontWeight: 700, color: 'var(--color-text)', marginBottom: 10 }}>Productos</div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -334,9 +645,14 @@ export default function Pedidos() {
                 ))}
               </div>
             </div>
-            <div style={{ display: 'flex', gap: 10 }}>
-              <button className="btn btn-outline" style={{ flex: 1, justifyContent: 'center' }} onClick={() => setSelectedOrder(null)}>Cerrar</button>
-              <button className="btn btn-primary" style={{ flex: 1, justifyContent: 'center' }} onClick={() => { setSelectedOrder(null); setInvoiceOrder(selectedOrder); }}>Facturar pedido</button>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+              <button className="btn btn-outline" style={{ flex: 1, justifyContent: 'center', minWidth: 120 }} onClick={() => setSelectedOrder(null)}>Cerrar</button>
+              <button className="btn btn-primary" style={{ flex: 1, justifyContent: 'center', backgroundColor: '#7c3aed', minWidth: 120 }} onClick={() => printDeliveryNote(selectedOrder)}>
+                <FileText size={16} strokeWidth={1.5} /> Imprimir entrega
+              </button>
+              {!isDomiciliario && (
+                <button className="btn btn-primary" style={{ flex: 1, justifyContent: 'center', minWidth: 120 }} onClick={() => { setSelectedOrder(null); setInvoiceOrder(selectedOrder); }}>Facturar pedido</button>
+              )}
             </div>
           </div>
         )}
@@ -441,11 +757,21 @@ export default function Pedidos() {
             </select>
           </div>
           <div className="form-group" style={{ marginBottom: 0 }}>
+            <label>Domiciliario</label>
+            <select className="form-control" value={editDeliveryPersonId} onChange={(e) => setEditDeliveryPersonId(e.target.value ? Number(e.target.value) : '')}>
+              <option value="">Sin asignar</option>
+              {users.filter((u) => u.role === 'DOMICILIARIO').map((u) => (
+                <option key={u.id} value={u.id}>{u.username}</option>
+              ))}
+            </select>
+          </div>
+          <div className="form-group" style={{ marginBottom: 0 }}>
             <label>Estado</label>
             <select className="form-control" value={editStatus} onChange={(e) => setEditStatus(e.target.value)}>
               <option value="PENDIENTE">Pendiente</option>
               <option value="EN_PREPARACION">En preparación</option>
               <option value="ENTREGADO">Entregado</option>
+              <option value="RECHAZADO">Rechazado</option>
               <option value="CANCELADO">Cancelado</option>
             </select>
           </div>
@@ -469,6 +795,24 @@ export default function Pedidos() {
         cancelText="Cancelar"
         variant="primary"
       />
+
+      {/* Modal Registrar Rechazo */}
+      <RejectionModal
+        isOpen={showRejectModal}
+        onClose={() => setShowRejectModal(false)}
+        orderId={rejectOrderId}
+        previousStatus={rejectPreviousStatus}
+        items={rejectItems}
+        onItemsChange={setRejectItems}
+        onSuccess={(msg) => {
+          setErrorModal(msg);
+          invalidateCache('orders-');
+          invalidateCache('seller-load-');
+          refresh();
+        }}
+        onError={(msg) => setErrorModal(msg)}
+      />
+
     </div>
   );
 }

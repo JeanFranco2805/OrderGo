@@ -16,6 +16,8 @@ import {
   Shield,
   Gift,
   Navigation,
+  Briefcase,
+  AlertTriangle,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { hasRouteAccess } from '../../utils/permissions';
@@ -33,6 +35,8 @@ const menuItems = [
   { to: '/metodos-pago', label: 'Métodos de pago', icon: CreditCard },
   { to: '/mapa', label: 'Mapa', icon: Map },
   { to: '/rutas', label: 'Mis rutas', icon: Navigation },
+  { to: '/cargue', label: 'Mi cargue', icon: Briefcase },
+  { to: '/control-cargue', label: 'Control de cargue', icon: AlertTriangle },
   { to: '/reportes', label: 'Reportes', icon: BarChart3 },
   { to: '/usuarios', label: 'Usuarios', icon: Shield },
   { to: '/configuracion', label: 'Configuración', icon: Settings },

@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { TrendingUp, TrendingDown, DollarSign, ShoppingCart, Users, Receipt, Package, CreditCard, Download, PieChart as PieIcon } from 'lucide-react';
 import * as XLSX from 'xlsx-js-style';
 import { formatCOP } from '../utils/currency';
+import { getLocalDateString } from '../utils/date';
 import { dashboardApi, type DashboardStats, type MonthlyTotal, type PaymentMethodTotal } from '../services/dashboardService';
 import '../styles/pages.css';
 
@@ -330,7 +331,7 @@ function exportExcel(
     XLSX.utils.book_append_sheet(wb, ws, 'Recaudo por método');
   }
 
-  const fileName = `reporte_ordergo_${new Date().toISOString().split('T')[0]}.xlsx`;
+  const fileName = `reporte_ordergo_${getLocalDateString()}.xlsx`;
   XLSX.writeFile(wb, fileName);
 }
 

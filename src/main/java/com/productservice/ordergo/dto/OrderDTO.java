@@ -28,6 +28,10 @@ public class OrderDTO {
 
     private String sellerName;
 
+    private Long deliveryPersonId;
+
+    private String deliveryPersonName;
+
     private OrderStatus status;
 
     private BigDecimal totalAmount;

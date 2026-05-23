@@ -51,6 +51,10 @@ public class Order {
     @JoinColumn(name = "seller_id")
     private User seller;
 
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "delivery_person_id")
+    private User deliveryPerson;
+
     @OneToMany(mappedBy = "order", cascade = CascadeType.ALL, orphanRemoval = true)
     @Builder.Default
     private List<OrderItem> items = new ArrayList<>();
@@ -61,4 +65,6 @@ public class Order {
 
     @LastModifiedDate
     private LocalDateTime updatedAt;
+
+    private LocalDateTime deliveredAt;
 }

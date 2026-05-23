@@ -1,19 +1,24 @@
 import { useState, useEffect } from 'react';
 import {
   Plus, Search, Warehouse, Pencil, Eye, Trash2,
-  DollarSign, Truck, Upload, X, Package
+  DollarSign, Truck, Upload, X, Package, Download
 } from 'lucide-react';
 import { inventoryApi, type InventoryItem } from '../services/inventoryService';
 import { supplierApi, type Supplier } from '../services/supplierService';
 import { inventoryExpenseApi, type InventoryExpense } from '../services/inventoryExpenseService';
 import { formatCOP } from '../utils/currency';
+import { getLocalDateString } from '../utils/date';
 import { useApiCache, invalidateCache } from '../hooks/useApiCache';
+import { useRole } from '../hooks/useRole';
+import { exportToExcel } from '../utils/exportExcel';
 import Modal from '../components/Modal';
 import ConfirmModal from '../components/ConfirmModal';
 import Pagination from '../components/Pagination';
 import '../styles/pages.css';
 
 export default function Inventario() {
+  const { isAdmin } = useRole();
+
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(0);
   const pageSize = 12;
@@ -55,7 +60,7 @@ export default function Inventario() {
   const [showCompra, setShowCompra] = useState(false);
   const [compraForm, setCompraForm] = useState<Partial<InventoryExpense>>({
     inventoryItemId: undefined, supplierId: undefined, quantity: 0, unitCost: 0,
-    expenseDate: new Date().toISOString().split('T')[0], description: ''
+    expenseDate: getLocalDateString(), description: ''
   });
 
   // Modal proveedor
@@ -134,7 +139,7 @@ export default function Inventario() {
     try {
       await inventoryExpenseApi.create(compraForm as any);
       setShowCompra(false);
-      setCompraForm({ inventoryItemId: undefined, supplierId: undefined, quantity: 0, unitCost: 0, expenseDate: new Date().toISOString().split('T')[0] });
+      setCompraForm({ inventoryItemId: undefined, supplierId: undefined, quantity: 0, unitCost: 0, expenseDate: getLocalDateString() });
       invalidateCache('inventory-');
       refresh();
     } catch (err) {
@@ -156,6 +161,49 @@ export default function Inventario() {
       setErrorModal('Error al eliminar compra: ' + (err as Error).message);
     } finally {
       setConfirmDeleteExpense(null);
+    }
+  };
+
+  const handleExport = async () => {
+    try {
+      const [itemsData, expensesData] = await Promise.all([
+        inventoryApi.getAll({ search: search || undefined, size: 1000 }),
+        inventoryExpenseApi.getAll({ size: 1000 }),
+      ]);
+      const itemRows = itemsData.content.map((i) => [
+        i.id,
+        i.name,
+        i.quantity,
+        i.category || '',
+        i.supplierName || '',
+        i.costPrice || 0,
+      ]);
+      const expenseRows = expensesData.content.map((e) => [
+        e.id,
+        e.inventoryItemName || '',
+        e.supplierName || 'N/A',
+        e.quantity,
+        e.unitCost,
+        e.totalCost,
+        e.expenseDate,
+      ]);
+      exportToExcel(
+        [
+          {
+            name: 'Inventario',
+            headers: ['ID', 'Nombre', 'Cantidad', 'Categoría', 'Proveedor', 'Costo'],
+            rows: itemRows,
+          },
+          {
+            name: 'Compras',
+            headers: ['ID', 'Ítem', 'Proveedor', 'Cantidad', 'Costo unitario', 'Total', 'Fecha'],
+            rows: expenseRows,
+          },
+        ],
+        `inventario_ordergo_${getLocalDateString()}.xlsx`
+      );
+    } catch {
+      setErrorModal('Error exportando inventario');
     }
   };
 
@@ -250,6 +298,11 @@ export default function Inventario() {
           <p>Control de stock y compras</p>
         </div>
         <div style={{ display: 'flex', gap: 10 }}>
+          {isAdmin && (
+            <button className="btn btn-outline" onClick={handleExport}>
+              <Download size={18} strokeWidth={1.5} /> Exportar Excel
+            </button>
+          )}
           <button className="btn btn-outline" onClick={() => setShowSupplierModal(true)}>
             <Truck size={18} strokeWidth={1.5} /> Nuevo proveedor
           </button>

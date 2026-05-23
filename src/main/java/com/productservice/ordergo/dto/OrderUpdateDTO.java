@@ -24,6 +24,8 @@ public class OrderUpdateDTO {
 
     private String customerPhone;
 
+    private Long deliveryPersonId;
+
     private OrderStatus status;
 
     private BigDecimal totalAmount;

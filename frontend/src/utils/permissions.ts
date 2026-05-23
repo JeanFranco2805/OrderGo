@@ -12,6 +12,7 @@ export const ROLE_ROUTES: Record<UserRole, string[]> = {
     '/ofertas',
     '/metodos-pago',
     '/mapa',
+    '/control-cargue',
     '/reportes',
     '/usuarios',
     '/configuracion',
@@ -30,12 +31,14 @@ export const ROLE_ROUTES: Record<UserRole, string[]> = {
     '/dashboard',
     '/pedidos',
     '/mapa',
+    '/cargue',
   ],
 };
 
 export function hasRouteAccess(role: string | null | undefined, path: string): boolean {
   if (!role) return false;
-  const routes = ROLE_ROUTES[role as UserRole];
+  const normalizedRole = role.toUpperCase() as UserRole;
+  const routes = ROLE_ROUTES[normalizedRole];
   if (!routes) return false;
   return routes.some((r) => path === r || path.startsWith(r + '/'));
 }

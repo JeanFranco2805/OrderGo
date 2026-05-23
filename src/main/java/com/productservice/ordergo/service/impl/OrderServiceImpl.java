@@ -3,6 +3,7 @@ package com.productservice.ordergo.service.impl;
 import com.productservice.ordergo.dto.OrderDTO;
 import com.productservice.ordergo.dto.OrderItemDTO;
 import com.productservice.ordergo.dto.OrderUpdateDTO;
+import com.productservice.ordergo.dto.RejectOrderDTO;
 import com.productservice.ordergo.entity.*;
 import com.productservice.ordergo.exception.BusinessException;
 import com.productservice.ordergo.exception.ResourceNotFoundException;
@@ -11,6 +12,7 @@ import com.productservice.ordergo.repository.OrderItemRepository;
 import com.productservice.ordergo.repository.OrderRepository;
 import com.productservice.ordergo.repository.ProductRepository;
 import com.productservice.ordergo.service.OrderService;
+import com.productservice.ordergo.service.SellerLoadService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -19,6 +21,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -39,6 +42,8 @@ public class OrderServiceImpl implements OrderService {
     private final com.productservice.ordergo.repository.OfferRepository offerRepository;
     private final com.productservice.ordergo.repository.InvoiceRepository invoiceRepository;
     private final com.productservice.ordergo.repository.UserRepository userRepository;
+    private final com.productservice.ordergo.repository.OrderRejectionRepository orderRejectionRepository;
+    private final SellerLoadService sellerLoadService;
 
     @Override
     public List<OrderDTO> findAll() {
@@ -105,8 +110,9 @@ public class OrderServiceImpl implements OrderService {
                 Product product = productRepository.findById(itemDTO.getProductId())
                     .orElseThrow(() -> new ResourceNotFoundException("Producto no encontrado con id: " + itemDTO.getProductId()));
 
-                if (product.getStock() < itemDTO.getQuantity()) {
-                    throw new BusinessException("Stock insuficiente para el producto: " + product.getName());
+                int needed = itemDTO.getQuantity() * piecesPerUnit(product);
+                if (product.getStock() < needed) {
+                    throw new BusinessException("Stock insuficiente para el producto: " + product.getName() + " (necesita " + needed + " piezas, disponible " + product.getStock() + ")");
                 }
 
                 BigDecimal subtotal = product.getPrice().multiply(BigDecimal.valueOf(itemDTO.getQuantity()));
@@ -132,9 +138,9 @@ public class OrderServiceImpl implements OrderService {
                 // Validate stock for all products in the offer
                 for (OfferItem oi : offer.getItems()) {
                     Product p = oi.getProduct();
-                    int needed = oi.getQuantity() * itemDTO.getQuantity();
+                    int needed = oi.getQuantity() * itemDTO.getQuantity() * piecesPerUnit(p);
                     if (p.getStock() < needed) {
-                        throw new BusinessException("Stock insuficiente para el producto '" + p.getName() + "' en la oferta '" + offer.getName() + "' (necesita " + needed + ", disponible " + p.getStock() + ")");
+                        throw new BusinessException("Stock insuficiente para el producto '" + p.getName() + "' en la oferta '" + offer.getName() + "' (necesita " + needed + " piezas, disponible " + p.getStock() + ")");
                     }
                 }
 
@@ -184,8 +190,30 @@ public class OrderServiceImpl implements OrderService {
         if (dto.getPaymentMethod() != null) {
             order.setPaymentMethod(dto.getPaymentMethod());
         }
+        boolean deliveryPersonChanged = false;
+        if (dto.getDeliveryPersonId() != null) {
+            User dp = userRepository.findById(dto.getDeliveryPersonId()).orElse(null);
+            if (order.getDeliveryPerson() == null && dp != null) {
+                deliveryPersonChanged = true;
+            }
+            order.setDeliveryPerson(dp);
+        }
 
         OrderStatus newStatus = order.getStatus();
+
+        // Auto-assign delivery person and add to load when domiciliario takes/edits a pedido
+        User currentUser = resolveAuthenticatedSeller();
+        if (order.getDeliveryPerson() == null
+            && currentUser != null && "DOMICILIARIO".equalsIgnoreCase(currentUser.getRole())) {
+            order.setDeliveryPerson(currentUser);
+            sellerLoadService.addOrderItemsToLoad(currentUser.getId(), order.getId());
+        }
+
+        // Add items to load when admin assigns a delivery person for the first time
+        if (deliveryPersonChanged && order.getDeliveryPerson() != null) {
+            sellerLoadService.addOrderItemsToLoad(order.getDeliveryPerson().getId(), order.getId());
+        }
+
         handleStockOnStatusChange(order, oldStatus, newStatus);
 
         return toDTO(orderRepository.save(order));
@@ -198,6 +226,14 @@ public class OrderServiceImpl implements OrderService {
             .orElseThrow(() -> new ResourceNotFoundException("Pedido no encontrado con id: " + id));
         OrderStatus newStatus = OrderStatus.valueOf(status);
         OrderStatus oldStatus = order.getStatus();
+
+        // Auto-assign delivery person and add to load when domiciliario takes/edits a pedido
+        User currentUser = resolveAuthenticatedSeller();
+        if (order.getDeliveryPerson() == null
+            && currentUser != null && "DOMICILIARIO".equalsIgnoreCase(currentUser.getRole())) {
+            order.setDeliveryPerson(currentUser);
+            sellerLoadService.addOrderItemsToLoad(currentUser.getId(), order.getId());
+        }
 
         handleStockOnStatusChange(order, oldStatus, newStatus);
 
@@ -217,33 +253,95 @@ public class OrderServiceImpl implements OrderService {
         } else if (oldReserves && !newReserves) {
             restoreStock(order);
         }
+
+        // Track delivery timestamp
+        if (newStatus == OrderStatus.ENTREGADO && order.getDeliveredAt() == null) {
+            order.setDeliveredAt(LocalDateTime.now());
+        } else if (oldStatus == OrderStatus.ENTREGADO && newStatus != OrderStatus.ENTREGADO) {
+            order.setDeliveredAt(null);
+        }
+
+        // Load tracking only applies to delivery persons
+        User loadUser = order.getDeliveryPerson();
+        if (loadUser == null) return;
+        Long loadUserId = loadUser.getId();
+
+        // Seller load state machine
+        if (oldStatus == OrderStatus.PENDIENTE && newStatus == OrderStatus.ENTREGADO) {
+            sellerLoadService.deductOnDelivery(loadUserId, order.getId());
+        } else if (oldStatus == OrderStatus.EN_PREPARACION && newStatus == OrderStatus.ENTREGADO) {
+            sellerLoadService.deductOnDelivery(loadUserId, order.getId());
+        } else if ((oldStatus == OrderStatus.PENDIENTE || oldStatus == OrderStatus.EN_PREPARACION) && newStatus == OrderStatus.RECHAZADO) {
+            // Frontend handles per-product rejection registration via /seller-loads/reject
+        } else if (oldStatus == OrderStatus.ENTREGADO && newStatus == OrderStatus.RECHAZADO) {
+            // Frontend handles per-product rejection registration via /seller-loads/reject
+        } else if (oldStatus == OrderStatus.RECHAZADO && newStatus == OrderStatus.ENTREGADO) {
+            sellerLoadService.reverseRejectionToDelivery(loadUserId, order.getId());
+            orderRejectionRepository.deleteByOrderId(order.getId());
+        } else if (oldStatus == OrderStatus.ENTREGADO && newStatus == OrderStatus.PENDIENTE) {
+            sellerLoadService.reverseDeliveryToPending(loadUserId, order.getId());
+        } else if (oldStatus == OrderStatus.RECHAZADO && newStatus == OrderStatus.PENDIENTE) {
+            sellerLoadService.reverseRejectionToPending(loadUserId, order.getId());
+            orderRejectionRepository.deleteByOrderId(order.getId());
+        }
+    }
+
+    private void createOrderRejectionRecords(Order order) {
+        if (orderRejectionRepository.existsByOrderId(order.getId())) {
+            return;
+        }
+        User loadUser = order.getDeliveryPerson() != null ? order.getDeliveryPerson() : order.getSeller();
+        if (loadUser == null) return;
+
+        for (OrderItem item : order.getItems()) {
+            if (item.getProduct() != null) {
+                OrderRejection rejection = OrderRejection.builder()
+                    .order(order)
+                    .product(item.getProduct())
+                    .seller(order.getSeller())
+                    .deliveryPerson(loadUser)
+                    .customer(order.getCustomer())
+                    .quantity(BigDecimal.valueOf(item.getQuantity() * piecesPerUnit(item.getProduct())))
+                    .reason("Pedido rechazado")
+                    .build();
+                orderRejectionRepository.save(rejection);
+            }
+        }
+    }
+
+    private int piecesPerUnit(Product product) {
+        return product.getPiecesPerUnit() != null ? product.getPiecesPerUnit() : 1;
     }
 
     private void deductStock(Order order) {
         for (OrderItem item : order.getItems()) {
             if (item.getProduct() != null) {
                 Product product = item.getProduct();
-                product.setStock(product.getStock() - item.getQuantity());
+                int qty = item.getQuantity() * piecesPerUnit(product);
+                product.setStock(product.getStock() - qty);
                 productRepository.save(product);
 
                 if (product.getInventoryItem() != null) {
                     com.productservice.ordergo.entity.InventoryItem invItem = product.getInventoryItem();
-                    double newQty = invItem.getQuantity() - item.getQuantity();
+                    double newQty = invItem.getQuantity() - qty;
                     invItem.setQuantity(Math.max(newQty, 0));
                     inventoryItemRepository.save(invItem);
                 }
             } else if (item.getOffer() != null) {
-                for (OfferItem oi : item.getOffer().getItems()) {
-                    Product product = oi.getProduct();
-                    int qty = oi.getQuantity() * item.getQuantity();
-                    product.setStock(product.getStock() - qty);
-                    productRepository.save(product);
+                Offer fullOffer = offerRepository.findByIdWithItems(item.getOffer().getId()).orElse(null);
+                if (fullOffer != null) {
+                    for (OfferItem oi : fullOffer.getItems()) {
+                        Product product = oi.getProduct();
+                        int qty = oi.getQuantity() * item.getQuantity() * piecesPerUnit(product);
+                        product.setStock(product.getStock() - qty);
+                        productRepository.save(product);
 
-                    if (product.getInventoryItem() != null) {
-                        com.productservice.ordergo.entity.InventoryItem invItem = product.getInventoryItem();
-                        double newQty = invItem.getQuantity() - qty;
-                        invItem.setQuantity(Math.max(newQty, 0));
-                        inventoryItemRepository.save(invItem);
+                        if (product.getInventoryItem() != null) {
+                            com.productservice.ordergo.entity.InventoryItem invItem = product.getInventoryItem();
+                            double newQty = invItem.getQuantity() - qty;
+                            invItem.setQuantity(Math.max(newQty, 0));
+                            inventoryItemRepository.save(invItem);
+                        }
                     }
                 }
             }
@@ -254,25 +352,29 @@ public class OrderServiceImpl implements OrderService {
         for (OrderItem item : order.getItems()) {
             if (item.getProduct() != null) {
                 Product product = item.getProduct();
-                product.setStock(product.getStock() + item.getQuantity());
+                int qty = item.getQuantity() * piecesPerUnit(product);
+                product.setStock(product.getStock() + qty);
                 productRepository.save(product);
 
                 if (product.getInventoryItem() != null) {
                     com.productservice.ordergo.entity.InventoryItem invItem = product.getInventoryItem();
-                    invItem.setQuantity(invItem.getQuantity() + item.getQuantity());
+                    invItem.setQuantity(invItem.getQuantity() + qty);
                     inventoryItemRepository.save(invItem);
                 }
             } else if (item.getOffer() != null) {
-                for (OfferItem oi : item.getOffer().getItems()) {
-                    Product product = oi.getProduct();
-                    int qty = oi.getQuantity() * item.getQuantity();
-                    product.setStock(product.getStock() + qty);
-                    productRepository.save(product);
+                Offer fullOffer = offerRepository.findByIdWithItems(item.getOffer().getId()).orElse(null);
+                if (fullOffer != null) {
+                    for (OfferItem oi : fullOffer.getItems()) {
+                        Product product = oi.getProduct();
+                        int qty = oi.getQuantity() * item.getQuantity() * piecesPerUnit(product);
+                        product.setStock(product.getStock() + qty);
+                        productRepository.save(product);
 
-                    if (product.getInventoryItem() != null) {
-                        com.productservice.ordergo.entity.InventoryItem invItem = product.getInventoryItem();
-                        invItem.setQuantity(invItem.getQuantity() + qty);
-                        inventoryItemRepository.save(invItem);
+                        if (product.getInventoryItem() != null) {
+                            com.productservice.ordergo.entity.InventoryItem invItem = product.getInventoryItem();
+                            invItem.setQuantity(invItem.getQuantity() + qty);
+                            inventoryItemRepository.save(invItem);
+                        }
                     }
                 }
             }
@@ -287,6 +389,11 @@ public class OrderServiceImpl implements OrderService {
         if (shouldReserveStock(order.getStatus())) {
             restoreStock(order);
         }
+        // Remove from domiciliario load if assigned
+        if (order.getDeliveryPerson() != null) {
+            sellerLoadService.removeOrderFromLoad(id);
+        }
+        orderRejectionRepository.deleteByOrderId(id);
         orderRepository.delete(order);
     }
 
@@ -298,8 +405,13 @@ public class OrderServiceImpl implements OrderService {
         if (shouldReserveStock(order.getStatus())) {
             restoreStock(order);
         }
+        // Remove from domiciliario load if assigned
+        if (order.getDeliveryPerson() != null) {
+            sellerLoadService.removeOrderFromLoad(id);
+        }
         // Desvincular facturas vinculadas a este pedido
         invoiceRepository.unlinkByOrderId(id);
+        orderRejectionRepository.deleteByOrderId(id);
         // Los order_items se borran automáticamente por cascade ALL
         orderRepository.delete(order);
     }
@@ -344,6 +456,10 @@ public class OrderServiceImpl implements OrderService {
         if (order.getSeller() != null) {
             builder.sellerId(order.getSeller().getId());
             builder.sellerName(order.getSeller().getUsername());
+        }
+        if (order.getDeliveryPerson() != null) {
+            builder.deliveryPersonId(order.getDeliveryPerson().getId());
+            builder.deliveryPersonName(order.getDeliveryPerson().getUsername());
         }
         return builder.build();
     }
