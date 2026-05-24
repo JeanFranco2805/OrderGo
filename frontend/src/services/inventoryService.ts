@@ -28,6 +28,7 @@ export const inventoryApi = {
     return api.get<PaginatedResponse<InventoryItem>>(`/inventory${qs ? '?' + qs : ''}`);
   },
   getById: (id: number) => api.get<InventoryItem>(`/inventory/${id}`),
+  getUnlinked: () => api.get<InventoryItem[]>('/inventory/unlinked'),
   create: (item: Omit<InventoryItem, 'id'>) => api.post<InventoryItem>('/inventory', item),
   update: (id: number, item: Partial<InventoryItem>) => api.put<InventoryItem>(`/inventory/${id}`, item),
   delete: (id: number) => api.delete<void>(`/inventory/${id}`),

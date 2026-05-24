@@ -38,4 +38,14 @@ public interface InvoiceRepository extends JpaRepository<Invoice, Long> {
     @org.springframework.data.jpa.repository.Modifying
     @org.springframework.data.jpa.repository.Query("UPDATE Invoice i SET i.orderId = null, i.orderNumber = null WHERE i.orderId = :orderId")
     void unlinkByOrderId(Long orderId);
+
+    long countByCustomerId(Long customerId);
+
+    @org.springframework.data.jpa.repository.Modifying
+    @org.springframework.data.jpa.repository.Query("UPDATE Invoice i SET i.customer = null WHERE i.customer.id = :customerId")
+    void unlinkByCustomerId(Long customerId);
+
+    @org.springframework.data.jpa.repository.Modifying
+    @org.springframework.data.jpa.repository.Query("DELETE FROM Invoice i WHERE i.customer.id = :customerId")
+    void deleteByCustomerId(Long customerId);
 }

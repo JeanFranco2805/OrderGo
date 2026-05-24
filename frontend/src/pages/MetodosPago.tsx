@@ -1,35 +1,62 @@
 import { useState, useEffect } from 'react';
 import { CreditCard, Plus, Trash2, AlertTriangle } from 'lucide-react';
-import { getPaymentMethods, savePaymentMethods } from '../services/paymentMethodService';
+import { getPaymentMethods, createPaymentMethod, deletePaymentMethod, type PaymentMethod } from '../services/paymentMethodService';
 import '../styles/pages.css';
 
 export default function MetodosPago() {
-  const [methods, setMethods] = useState<string[]>([]);
+  const [methods, setMethods] = useState<PaymentMethod[]>([]);
   const [newMethod, setNewMethod] = useState('');
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    setMethods(getPaymentMethods());
+    loadMethods();
   }, []);
 
-  const addMethod = () => {
+  async function loadMethods() {
+    try {
+      setLoading(true);
+      await getPaymentMethods();
+      // Reconstruct as PaymentMethod objects without IDs (display only)
+      // We fetch fresh to get IDs for deletion
+      const all = await fetch(`${import.meta.env.VITE_API_BASE || 'http://localhost:8080/api/v1'}/payment-methods`, {
+        headers: {
+          'Content-Type': 'application/json',
+          ...(localStorage.getItem('token') ? { Authorization: `Bearer ${localStorage.getItem('token')}` } : {}),
+        },
+      }).then((r) => r.json());
+      setMethods(all);
+    } catch (err: any) {
+      setError(err.message || 'Error cargando métodos de pago');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const addMethod = async () => {
     const trimmed = newMethod.trim().toUpperCase();
     if (!trimmed) return;
-    if (methods.includes(trimmed)) {
+    if (methods.some((m) => m.name === trimmed)) {
       setError('Este método de pago ya existe.');
       return;
     }
-    const updated = [...methods, trimmed];
-    setMethods(updated);
-    savePaymentMethods(updated);
-    setNewMethod('');
-    setError('');
+    try {
+      setError('');
+      await createPaymentMethod(trimmed);
+      await loadMethods();
+      setNewMethod('');
+    } catch (err: any) {
+      setError(err.message || 'Error agregando método de pago');
+    }
   };
 
-  const removeMethod = (m: string) => {
-    const updated = methods.filter((x) => x !== m);
-    setMethods(updated);
-    savePaymentMethods(updated);
+  const removeMethod = async (id: number) => {
+    try {
+      await deletePaymentMethod(id);
+      await loadMethods();
+    } catch (err: any) {
+      setError(err.message || 'Error eliminando método de pago');
+    }
   };
 
   return (
@@ -77,29 +104,42 @@ export default function MetodosPago() {
               </tr>
             </thead>
             <tbody>
-              {methods.map((m) => (
-                <tr key={m}>
-                  <td>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                      <div style={{ padding: 8, borderRadius: 'var(--radius-md)', backgroundColor: '#eef2ff', color: '#4f46e5' }}>
-                        <CreditCard size={16} strokeWidth={1.5} />
-                      </div>
-                      <span style={{ fontWeight: 600, fontSize: '0.9rem', textTransform: 'uppercase' }}>{m}</span>
-                    </div>
-                  </td>
-                  <td style={{ textAlign: 'right' }}>
-                    <button className="navbar-icon-btn" aria-label="Eliminar" onClick={() => removeMethod(m)} style={{ padding: 6, borderRadius: 8, backgroundColor: '#fef2f2', color: '#ef4444' }}>
-                      <Trash2 size={15} strokeWidth={1.5} />
-                    </button>
-                  </td>
-                </tr>
-              ))}
-              {methods.length === 0 && (
+              {loading ? (
                 <tr>
-                  <td colSpan={2} style={{ textAlign: 'center', color: 'var(--color-text-muted)', padding: '40px 16px' }}>
-                    No hay métodos de pago configurados
-                  </td>
+                  <td colSpan={2} style={{ textAlign: 'center', padding: '40px 16px' }}>Cargando...</td>
                 </tr>
+              ) : (
+                <>
+                  {methods.map((m) => (
+                    <tr key={m.id}>
+                      <td>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                          <div style={{ padding: 8, borderRadius: 'var(--radius-md)', backgroundColor: '#eef2ff', color: '#4f46e5' }}>
+                            <CreditCard size={16} strokeWidth={1.5} />
+                          </div>
+                          <span style={{ fontWeight: 600, fontSize: '0.9rem', textTransform: 'uppercase' }}>{m.name}</span>
+                        </div>
+                      </td>
+                      <td style={{ textAlign: 'right' }}>
+                        <button
+                          className="navbar-icon-btn"
+                          aria-label="Eliminar"
+                          onClick={() => removeMethod(m.id)}
+                          style={{ padding: 6, borderRadius: 8, backgroundColor: '#fef2f2', color: '#ef4444' }}
+                        >
+                          <Trash2 size={15} strokeWidth={1.5} />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                  {methods.length === 0 && (
+                    <tr>
+                      <td colSpan={2} style={{ textAlign: 'center', color: 'var(--color-text-muted)', padding: '40px 16px' }}>
+                        No hay métodos de pago configurados
+                      </td>
+                    </tr>
+                  )}
+                </>
               )}
             </tbody>
           </table>

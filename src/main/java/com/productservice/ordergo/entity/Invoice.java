@@ -30,7 +30,7 @@ public class Invoice {
     private String invoiceNumber;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "customer_id", nullable = false)
+    @JoinColumn(name = "customer_id", nullable = true)
     private Customer customer;
 
     @Column(nullable = false)

@@ -58,6 +58,7 @@ export default function Pedidos() {
   const [createPaymentMethod, setCreatePaymentMethod] = useState('');
   const [createItems, setCreateItems] = useState<{ type: 'product' | 'offer'; id?: number; quantity: number }[]>([]);
   const [createLoading, setCreateLoading] = useState(false);
+  const [paymentMethods, setPaymentMethods] = useState<string[]>([]);
 
   // Edit order modal
   const [showEdit, setShowEdit] = useState(false);
@@ -93,6 +94,12 @@ export default function Pedidos() {
     customerApi.getAll({ size: 1000 })
       .then((cData) => setCustomers(cData.content))
       .catch(() => setCustomers([]));
+  }, []);
+
+  useEffect(() => {
+    getPaymentMethods()
+      .then((methods) => setPaymentMethods(methods))
+      .catch(() => setPaymentMethods([]));
   }, []);
 
   useEffect(() => {
@@ -190,6 +197,8 @@ export default function Pedidos() {
       };
       if (editDeliveryPersonId !== '') {
         payload.deliveryPersonId = Number(editDeliveryPersonId);
+      } else {
+        payload.deliveryPersonId = null;
       }
       await orderApi.update(editOrderId, payload);
       setShowEdit(false);
@@ -680,7 +689,7 @@ export default function Pedidos() {
             <label>Método de pago</label>
             <select className="form-control" value={createPaymentMethod} onChange={(e) => setCreatePaymentMethod(e.target.value)}>
               <option value="">Selecciona método de pago...</option>
-              {getPaymentMethods().map((m) => (
+              {paymentMethods.map((m) => (
                 <option key={m} value={m}>{m}</option>
               ))}
             </select>
@@ -751,7 +760,7 @@ export default function Pedidos() {
             <label>Método de pago</label>
             <select className="form-control" value={editPaymentMethod} onChange={(e) => setEditPaymentMethod(e.target.value)}>
               <option value="">Selecciona método de pago...</option>
-              {getPaymentMethods().map((m) => (
+              {paymentMethods.map((m) => (
                 <option key={m} value={m}>{m}</option>
               ))}
             </select>
@@ -772,7 +781,6 @@ export default function Pedidos() {
               <option value="EN_PREPARACION">En preparación</option>
               <option value="ENTREGADO">Entregado</option>
               <option value="RECHAZADO">Rechazado</option>
-              <option value="CANCELADO">Cancelado</option>
             </select>
           </div>
           <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>

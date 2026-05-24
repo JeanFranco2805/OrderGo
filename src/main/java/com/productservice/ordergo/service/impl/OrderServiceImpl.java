@@ -93,12 +93,15 @@ public class OrderServiceImpl implements OrderService {
 
         User seller = resolveAuthenticatedSeller();
 
+        String deliveryAddr = customer.getAddressLabel() != null ? customer.getAddressLabel() : customer.getAddress();
         Order order = Order.builder()
             .orderNumber("ORD-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase())
             .customer(customer)
             .status(OrderStatus.PENDIENTE)
             .totalAmount(BigDecimal.ZERO)
-            .deliveryAddress(customer.getAddress())
+            .deliveryAddress(deliveryAddr)
+            .latitude(customer.getLatitude())
+            .longitude(customer.getLongitude())
             .paymentMethod(dto.getPaymentMethod())
             .seller(seller)
             .items(new ArrayList<>())
@@ -190,13 +193,32 @@ public class OrderServiceImpl implements OrderService {
         if (dto.getPaymentMethod() != null) {
             order.setPaymentMethod(dto.getPaymentMethod());
         }
-        boolean deliveryPersonChanged = false;
+        // Track delivery person changes for load management
+        User previousDp = order.getDeliveryPerson();
+        Long previousDpId = previousDp != null ? previousDp.getId() : null;
+        boolean isPending = order.getStatus() == OrderStatus.PENDIENTE || order.getStatus() == OrderStatus.EN_PREPARACION;
+
         if (dto.getDeliveryPersonId() != null) {
             User dp = userRepository.findById(dto.getDeliveryPersonId()).orElse(null);
-            if (order.getDeliveryPerson() == null && dp != null) {
-                deliveryPersonChanged = true;
+            Long newDpId = dp != null ? dp.getId() : null;
+
+            // If changing delivery person, remove from previous load first
+            if (previousDpId != null && !previousDpId.equals(newDpId) && isPending) {
+                sellerLoadService.removeOrderFromLoadBySellerId(order.getId(), previousDpId);
             }
+
             order.setDeliveryPerson(dp);
+
+            // Add to new load if pending and actually changed
+            if (newDpId != null && !newDpId.equals(previousDpId) && isPending) {
+                sellerLoadService.addOrderItemsToLoad(newDpId, order.getId());
+            }
+        } else if (dto.getDeliveryPersonId() == null && previousDpId != null) {
+            // Explicitly unassign delivery person
+            if (isPending) {
+                sellerLoadService.removeOrderFromLoadBySellerId(order.getId(), previousDpId);
+            }
+            order.setDeliveryPerson(null);
         }
 
         OrderStatus newStatus = order.getStatus();
@@ -206,12 +228,9 @@ public class OrderServiceImpl implements OrderService {
         if (order.getDeliveryPerson() == null
             && currentUser != null && "DOMICILIARIO".equalsIgnoreCase(currentUser.getRole())) {
             order.setDeliveryPerson(currentUser);
-            sellerLoadService.addOrderItemsToLoad(currentUser.getId(), order.getId());
-        }
-
-        // Add items to load when admin assigns a delivery person for the first time
-        if (deliveryPersonChanged && order.getDeliveryPerson() != null) {
-            sellerLoadService.addOrderItemsToLoad(order.getDeliveryPerson().getId(), order.getId());
+            if (isPending) {
+                sellerLoadService.addOrderItemsToLoad(currentUser.getId(), order.getId());
+            }
         }
 
         handleStockOnStatusChange(order, oldStatus, newStatus);
@@ -281,6 +300,9 @@ public class OrderServiceImpl implements OrderService {
         } else if (oldStatus == OrderStatus.ENTREGADO && newStatus == OrderStatus.PENDIENTE) {
             sellerLoadService.reverseDeliveryToPending(loadUserId, order.getId());
         } else if (oldStatus == OrderStatus.RECHAZADO && newStatus == OrderStatus.PENDIENTE) {
+            sellerLoadService.reverseRejectionToPending(loadUserId, order.getId());
+            orderRejectionRepository.deleteByOrderId(order.getId());
+        } else if (oldStatus == OrderStatus.RECHAZADO && newStatus == OrderStatus.EN_PREPARACION) {
             sellerLoadService.reverseRejectionToPending(loadUserId, order.getId());
             orderRejectionRepository.deleteByOrderId(order.getId());
         }
@@ -429,12 +451,14 @@ public class OrderServiceImpl implements OrderService {
         OrderDTO.OrderDTOBuilder builder = OrderDTO.builder()
             .id(order.getId())
             .orderNumber(order.getOrderNumber())
-            .customerId(order.getCustomer().getId())
-            .customerName(order.getCustomer().getName())
-            .customerPhone(order.getCustomer().getPhone())
+            .customerId(order.getCustomer() != null ? order.getCustomer().getId() : null)
+            .customerName(order.getCustomer() != null ? order.getCustomer().getName() : "Cliente eliminado")
+            .customerPhone(order.getCustomer() != null ? order.getCustomer().getPhone() : null)
             .status(order.getStatus())
             .totalAmount(order.getTotalAmount())
             .deliveryAddress(order.getDeliveryAddress())
+            .latitude(order.getLatitude())
+            .longitude(order.getLongitude())
             .paymentMethod(order.getPaymentMethod())
             .items(order.getItems().stream().map(item -> {
                 OrderItemDTO.OrderItemDTOBuilder itemBuilder = OrderItemDTO.builder()

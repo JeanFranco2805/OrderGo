@@ -24,6 +24,8 @@ export interface Order {
   status: 'PENDIENTE' | 'EN_PREPARACION' | 'ENTREGADO' | 'CANCELADO' | 'RECHAZADO';
   totalAmount: number;
   deliveryAddress?: string;
+  latitude?: number;
+  longitude?: number;
   paymentMethod?: string;
   items: OrderItem[];
 }

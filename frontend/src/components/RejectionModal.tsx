@@ -40,26 +40,15 @@ export default function RejectionModal({
     try {
       setLoading(true);
       await orderRejectionApi.clearByOrderId(orderId);
-      await Promise.all(
-        items.map((it) => {
-          if (it.offerId) {
-            return orderRejectionApi.create({
-              orderId,
-              offerId: it.offerId,
-              quantity: it.maxQuantity,
-              reason: 'Pedido rechazado',
-              previousStatus,
-            });
-          }
-          return orderRejectionApi.create({
-            orderId,
-            productId: it.productId!,
-            quantity: it.maxQuantity,
-            reason: 'Pedido rechazado',
-            previousStatus,
-          });
-        })
-      );
+      const batch = items.map((it) => ({
+        orderId,
+        offerId: it.offerId,
+        productId: it.productId,
+        quantity: it.maxQuantity,
+        reason: 'Pedido rechazado',
+        previousStatus,
+      }));
+      await orderRejectionApi.createBatch(batch);
       setLoading(false);
       setReason('');
       onSuccess('Rechazo registrado exitosamente (todo el pedido).');
@@ -80,26 +69,15 @@ export default function RejectionModal({
     try {
       setLoading(true);
       await orderRejectionApi.clearByOrderId(orderId);
-      await Promise.all(
-        selected.map((it) => {
-          if (it.offerId) {
-            return orderRejectionApi.create({
-              orderId,
-              offerId: it.offerId,
-              quantity: it.quantity,
-              reason: reason || 'Pedido rechazado',
-              previousStatus,
-            });
-          }
-          return orderRejectionApi.create({
-            orderId,
-            productId: it.productId!,
-            quantity: it.quantity,
-            reason: reason || 'Pedido rechazado',
-            previousStatus,
-          });
-        })
-      );
+      const batch = selected.map((it) => ({
+        orderId,
+        offerId: it.offerId,
+        productId: it.productId,
+        quantity: it.quantity,
+        reason: reason || 'Pedido rechazado',
+        previousStatus,
+      }));
+      await orderRejectionApi.createBatch(batch);
       setLoading(false);
       setReason('');
       onSuccess('Rechazo registrado exitosamente.');

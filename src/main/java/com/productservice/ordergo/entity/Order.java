@@ -31,7 +31,7 @@ public class Order {
     private String orderNumber;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "customer_id", nullable = false)
+    @JoinColumn(name = "customer_id", nullable = true)
     private Customer customer;
 
     @Enumerated(EnumType.STRING)
@@ -43,6 +43,10 @@ public class Order {
 
     @Column(length = 255)
     private String deliveryAddress;
+
+    private Double latitude;
+
+    private Double longitude;
 
     @Column(length = 30)
     private String paymentMethod;

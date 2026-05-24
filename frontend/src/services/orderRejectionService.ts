@@ -37,6 +37,21 @@ export const orderRejectionApi = {
     }
   },
 
+  createBatch: async (items: { orderId: number; productId?: number; offerId?: number; quantity: number; reason?: string; previousStatus?: string }[]): Promise<void> => {
+    const res = await fetch(`${API_BASE}/seller-loads/reject/batch`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${localStorage.getItem('token') || ''}`,
+      },
+      body: JSON.stringify({ items }),
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(text || 'Error registrando rechazo');
+    }
+  },
+
   clearByOrderId: async (orderId: number): Promise<void> => {
     const res = await fetch(`${API_BASE}/seller-loads/reject/${orderId}`, {
       method: 'DELETE',

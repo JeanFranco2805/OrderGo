@@ -43,7 +43,7 @@ public class OrderRejection {
     private User deliveryPerson;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "customer_id", nullable = false)
+    @JoinColumn(name = "customer_id", nullable = true)
     private Customer customer;
 
     @Column(nullable = false, precision = 15, scale = 2)

@@ -21,6 +21,8 @@ import java.util.stream.Collectors;
 public class SupplierServiceImpl implements SupplierService {
 
     private final SupplierRepository supplierRepository;
+    private final com.productservice.ordergo.repository.InventoryItemRepository inventoryItemRepository;
+    private final com.productservice.ordergo.repository.InventoryExpenseRepository inventoryExpenseRepository;
 
     @Override
     public List<SupplierDTO> findAll() {
@@ -79,6 +81,8 @@ public class SupplierServiceImpl implements SupplierService {
         if (!supplierRepository.existsById(id)) {
             throw new ResourceNotFoundException("Proveedor no encontrado con id: " + id);
         }
+        inventoryItemRepository.unlinkBySupplierId(id);
+        inventoryExpenseRepository.unlinkBySupplierId(id);
         supplierRepository.deleteById(id);
     }
 

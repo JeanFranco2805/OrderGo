@@ -61,6 +61,13 @@ public class InventoryItemServiceImpl implements InventoryItemService {
     }
 
     @Override
+    public List<InventoryItemDTO> findUnlinked() {
+        return inventoryItemRepository.findUnlinked().stream()
+            .map(this::toDTO)
+            .collect(Collectors.toList());
+    }
+
+    @Override
     @Transactional
     public InventoryItemDTO create(InventoryItemDTO dto) {
         InventoryItem item = toEntity(dto);

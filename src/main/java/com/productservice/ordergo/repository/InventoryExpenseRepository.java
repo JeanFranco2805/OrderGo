@@ -22,4 +22,8 @@ public interface InventoryExpenseRepository extends JpaRepository<InventoryExpen
 
     @Query("SELECT YEAR(e.expenseDate), MONTH(e.expenseDate), SUM(e.totalCost) FROM InventoryExpense e WHERE e.expenseDate >= :startDate GROUP BY YEAR(e.expenseDate), MONTH(e.expenseDate) ORDER BY YEAR(e.expenseDate) DESC, MONTH(e.expenseDate) DESC")
     List<Object[]> findMonthlyTotals(@Param("startDate") LocalDate startDate);
+
+    @org.springframework.data.jpa.repository.Modifying
+    @org.springframework.data.jpa.repository.Query("UPDATE InventoryExpense e SET e.supplier = null WHERE e.supplier.id = :supplierId")
+    void unlinkBySupplierId(Long supplierId);
 }

@@ -23,6 +23,10 @@ public class UserServiceImpl implements UserService {
 
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
+    private final com.productservice.ordergo.repository.SellerLoadRepository sellerLoadRepository;
+    private final com.productservice.ordergo.repository.OrderRepository orderRepository;
+    private final com.productservice.ordergo.repository.OrderRejectionRepository orderRejectionRepository;
+    private final com.productservice.ordergo.repository.CustomerRepository customerRepository;
 
     @Override
     public List<UserDTO> findAll() {
@@ -83,6 +87,31 @@ public class UserServiceImpl implements UserService {
         if (!userRepository.existsById(id)) {
             throw new ResourceNotFoundException("Usuario no encontrado con id: " + id);
         }
+        // Desvincular de entidades que permiten null
+        orderRepository.unlinkSellerByUserId(id);
+        orderRepository.unlinkDeliveryPersonByUserId(id);
+        orderRejectionRepository.unlinkSellerByUserId(id);
+        orderRejectionRepository.unlinkDeliveryPersonByUserId(id);
+        customerRepository.unlinkBySellerId(id);
+        // Eliminar cargas de vendedor (seller_id es not-null)
+        sellerLoadRepository.deleteBySellerId(id);
+        userRepository.deleteById(id);
+    }
+
+    @Override
+    @Transactional
+    public void forceDelete(Long id) {
+        if (!userRepository.existsById(id)) {
+            throw new ResourceNotFoundException("Usuario no encontrado con id: " + id);
+        }
+        // Desvincular de entidades que permiten null
+        orderRepository.unlinkSellerByUserId(id);
+        orderRepository.unlinkDeliveryPersonByUserId(id);
+        orderRejectionRepository.unlinkSellerByUserId(id);
+        orderRejectionRepository.unlinkDeliveryPersonByUserId(id);
+        customerRepository.unlinkBySellerId(id);
+        // Eliminar cargas de vendedor (seller_id es not-null)
+        sellerLoadRepository.deleteBySellerId(id);
         userRepository.deleteById(id);
     }
 

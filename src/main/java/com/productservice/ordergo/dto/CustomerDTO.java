@@ -26,6 +26,9 @@ public class CustomerDTO {
     @Size(max = 250, message = "La dirección no puede exceder 250 caracteres")
     private String address;
 
+    @Size(max = 250, message = "La dirección de etiqueta no puede exceder 250 caracteres")
+    private String addressLabel;
+
     private Long sellerId;
 
     private String sellerName;
@@ -38,4 +41,8 @@ public class CustomerDTO {
 
     @Size(max = 20, message = "La frecuencia no puede exceder 20 caracteres")
     private String visitFrequency;
+
+    private Double latitude;
+
+    private Double longitude;
 }

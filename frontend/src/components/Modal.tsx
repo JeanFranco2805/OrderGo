@@ -5,10 +5,11 @@ interface ModalProps {
   isOpen: boolean;
   onClose: () => void;
   title?: string;
+  wide?: boolean;
   children: React.ReactNode;
 }
 
-export default function Modal({ isOpen, onClose, title, children }: ModalProps) {
+export default function Modal({ isOpen, onClose, title, wide, children }: ModalProps) {
   if (!isOpen) return null;
 
   return (
@@ -24,7 +25,7 @@ export default function Modal({ isOpen, onClose, title, children }: ModalProps) 
           borderRadius: 'var(--radius-lg)',
           boxShadow: 'var(--shadow-lg)',
           width: '100%',
-          maxWidth: 520,
+          maxWidth: wide ? 900 : 520,
           maxHeight: '90vh',
           overflowY: 'auto',
           margin: '16px',

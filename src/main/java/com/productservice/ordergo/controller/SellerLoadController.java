@@ -53,6 +53,12 @@ public class SellerLoadController {
         return ResponseEntity.ok().build();
     }
 
+    @PostMapping("/reject/batch")
+    public ResponseEntity<Void> registerRejectionBatch(@Valid @RequestBody RejectOrderBatchDTO dto) {
+        sellerLoadService.registerRejectionBatch(resolveSellerId(), dto);
+        return ResponseEntity.ok().build();
+    }
+
     @DeleteMapping("/reject/{orderId}")
     public ResponseEntity<Void> clearRejection(@PathVariable Long orderId) {
         sellerLoadService.clearRejectionForOrder(orderId);

@@ -1,6 +1,7 @@
 package com.productservice.ordergo.controller;
 
 import com.productservice.ordergo.dto.CustomerDTO;
+import com.productservice.ordergo.dto.CustomerLocationDTO;
 import com.productservice.ordergo.service.CustomerService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -50,9 +51,20 @@ public class CustomerController {
         return ResponseEntity.ok(customerService.update(id, dto));
     }
 
+    @PatchMapping("/{id}/location")
+    public ResponseEntity<CustomerDTO> updateLocation(@PathVariable Long id, @RequestBody CustomerLocationDTO dto) {
+        return ResponseEntity.ok(customerService.updateLocation(id, dto));
+    }
+
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> delete(@PathVariable Long id) {
         customerService.delete(id);
+        return ResponseEntity.noContent().build();
+    }
+
+    @DeleteMapping("/{id}/force")
+    public ResponseEntity<Void> forceDelete(@PathVariable Long id) {
+        customerService.forceDelete(id);
         return ResponseEntity.noContent().build();
     }
 

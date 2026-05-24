@@ -12,6 +12,7 @@ public interface InventoryItemService {
     InventoryItemDTO findById(Long id);
     List<InventoryItemDTO> search(String name);
     Page<InventoryItemDTO> search(String name, Pageable pageable);
+    List<InventoryItemDTO> findUnlinked();
     InventoryItemDTO create(InventoryItemDTO dto);
     InventoryItemDTO update(Long id, InventoryItemDTO dto);
     InventoryItemDTO updateImage(Long id, String imageUrl);

@@ -207,7 +207,7 @@ export default function Ofertas() {
           <div style={{ position: 'relative' }}>
             <input
               type="file"
-              accept="image/*"
+              accept="image/jpeg,image/png,image/webp,image/gif,image/bmp"
               id={`file-offer-${label}`}
               style={{ display: 'none' }}
               onChange={(e) => {

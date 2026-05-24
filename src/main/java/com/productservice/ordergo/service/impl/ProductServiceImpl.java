@@ -26,6 +26,8 @@ public class ProductServiceImpl implements ProductService {
     private final InventoryItemRepository inventoryItemRepository;
     private final com.productservice.ordergo.repository.OrderItemRepository orderItemRepository;
     private final com.productservice.ordergo.repository.OfferRepository offerRepository;
+    private final com.productservice.ordergo.repository.SellerLoadItemRepository sellerLoadItemRepository;
+    private final com.productservice.ordergo.repository.OrderRejectionRepository orderRejectionRepository;
 
     @Override
     public List<ProductDTO> findAll() {
@@ -126,6 +128,24 @@ public class ProductServiceImpl implements ProductService {
                 "No se puede eliminar el producto porque está en " + orderItemCount + " pedido(s)."
             );
         }
+        long sellerLoadItemCount = sellerLoadItemRepository.countByProductId(id);
+        if (sellerLoadItemCount > 0) {
+            throw new com.productservice.ordergo.exception.BusinessException(
+                "No se puede eliminar el producto porque está en " + sellerLoadItemCount + " carga(s) de vendedor."
+            );
+        }
+        long offerItemCount = offerRepository.countOfferItemsByProductId(id);
+        if (offerItemCount > 0) {
+            throw new com.productservice.ordergo.exception.BusinessException(
+                "No se puede eliminar el producto porque está en " + offerItemCount + " oferta(s)."
+            );
+        }
+        long orderRejectionCount = orderRejectionRepository.countByProductId(id);
+        if (orderRejectionCount > 0) {
+            throw new com.productservice.ordergo.exception.BusinessException(
+                "No se puede eliminar el producto porque está en " + orderRejectionCount + " rechazo(s) de pedido."
+            );
+        }
         productRepository.deleteById(id);
     }
 
@@ -138,6 +158,10 @@ public class ProductServiceImpl implements ProductService {
         orderItemRepository.unlinkByProductId(id);
         // Borrar offer_items que usan este producto
         offerRepository.deleteOfferItemsByProductId(id);
+        // Borrar seller_load_items que usan este producto
+        sellerLoadItemRepository.deleteByProductId(id);
+        // Desvincular order_rejections que usan este producto
+        orderRejectionRepository.unlinkByProductId(id);
         productRepository.delete(product);
     }
 

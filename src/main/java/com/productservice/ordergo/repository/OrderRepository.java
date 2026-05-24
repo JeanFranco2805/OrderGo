@@ -29,6 +29,25 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
     long countByCustomerId(Long customerId);
     List<Order> findByCustomerId(Long customerId);
 
+    @org.springframework.data.jpa.repository.Modifying
+    @org.springframework.data.jpa.repository.Query("UPDATE Order o SET o.customer = null WHERE o.customer.id = :customerId")
+    void unlinkByCustomerId(Long customerId);
+
+    @org.springframework.data.jpa.repository.Modifying
+    @org.springframework.data.jpa.repository.Query("DELETE FROM Order o WHERE o.customer.id = :customerId")
+    void deleteByCustomerId(Long customerId);
+
+    long countBySellerId(Long sellerId);
+    long countByDeliveryPersonId(Long deliveryPersonId);
+
+    @org.springframework.data.jpa.repository.Modifying
+    @org.springframework.data.jpa.repository.Query("UPDATE Order o SET o.seller = null WHERE o.seller.id = :userId")
+    void unlinkSellerByUserId(Long userId);
+
+    @org.springframework.data.jpa.repository.Modifying
+    @org.springframework.data.jpa.repository.Query("UPDATE Order o SET o.deliveryPerson = null WHERE o.deliveryPerson.id = :userId")
+    void unlinkDeliveryPersonByUserId(Long userId);
+
     @Query("SELECT o FROM Order o LEFT JOIN FETCH o.items i LEFT JOIN FETCH i.product p WHERE o.seller.id = :sellerId AND CAST(o.createdAt AS DATE) = CURRENT_DATE")
     List<Order> findTodayBySellerId(@org.springframework.data.repository.query.Param("sellerId") Long sellerId);
 

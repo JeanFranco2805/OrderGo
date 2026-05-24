@@ -1,16 +1,19 @@
-export const PAYMENT_METHODS_KEY = 'ordergo_payment_methods';
+import { api } from './api';
 
-export function getPaymentMethods(): string[] {
-  const raw = localStorage.getItem(PAYMENT_METHODS_KEY);
-  if (raw) {
-    try {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-    } catch { /* fall through */ }
-  }
-  return ['EFECTIVO', 'TRANSFERENCIA', 'NEQUI', 'DAVIPLATA', 'TARJETA', 'OTRO'];
+export interface PaymentMethod {
+  id: number;
+  name: string;
 }
 
-export function savePaymentMethods(methods: string[]) {
-  localStorage.setItem(PAYMENT_METHODS_KEY, JSON.stringify(methods));
+export async function getPaymentMethods(): Promise<string[]> {
+  const methods = await api.get<PaymentMethod[]>('/payment-methods');
+  return methods.map((m) => m.name);
+}
+
+export async function createPaymentMethod(name: string): Promise<PaymentMethod> {
+  return api.post<PaymentMethod>('/payment-methods', { name });
+}
+
+export async function deletePaymentMethod(id: number): Promise<void> {
+  return api.delete<void>(`/payment-methods/${id}`);
 }

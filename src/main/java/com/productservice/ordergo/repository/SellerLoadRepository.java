@@ -27,4 +27,10 @@ public interface SellerLoadRepository extends JpaRepository<SellerLoad, Long> {
 
     @Query("SELECT sl FROM SellerLoad sl LEFT JOIN FETCH sl.items WHERE sl.loadDate = :loadDate AND sl.status = 'ACTIVO'")
     List<SellerLoad> findActiveByLoadDate(@org.springframework.data.repository.query.Param("loadDate") LocalDate loadDate);
+
+    long countBySellerId(Long sellerId);
+
+    @org.springframework.data.jpa.repository.Modifying
+    @org.springframework.data.jpa.repository.Query("DELETE FROM SellerLoad sl WHERE sl.seller.id = :sellerId")
+    void deleteBySellerId(Long sellerId);
 }

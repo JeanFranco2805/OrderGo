@@ -25,4 +25,31 @@ public interface OrderRejectionRepository extends JpaRepository<OrderRejection, 
 
     @Query("SELECT COUNT(DISTINCT r.customer.id) FROM OrderRejection r WHERE CAST(r.rejectedAt AS DATE) = :date AND r.deliveryPerson.id = :dpId")
     Long countDistinctCustomersByDateAndDeliveryPerson(@Param("date") LocalDate date, @Param("dpId") Long dpId);
+
+    long countByProductId(Long productId);
+
+    @org.springframework.data.jpa.repository.Modifying
+    @org.springframework.data.jpa.repository.Query("UPDATE OrderRejection r SET r.product = null WHERE r.product.id = :productId")
+    void unlinkByProductId(Long productId);
+
+    long countByCustomerId(Long customerId);
+
+    @org.springframework.data.jpa.repository.Modifying
+    @org.springframework.data.jpa.repository.Query("UPDATE OrderRejection r SET r.customer = null WHERE r.customer.id = :customerId")
+    void unlinkByCustomerId(Long customerId);
+
+    @org.springframework.data.jpa.repository.Modifying
+    @org.springframework.data.jpa.repository.Query("DELETE FROM OrderRejection r WHERE r.customer.id = :customerId")
+    void deleteByCustomerId(Long customerId);
+
+    long countBySellerId(Long sellerId);
+    long countByDeliveryPersonId(Long deliveryPersonId);
+
+    @org.springframework.data.jpa.repository.Modifying
+    @org.springframework.data.jpa.repository.Query("UPDATE OrderRejection r SET r.seller = null WHERE r.seller.id = :userId")
+    void unlinkSellerByUserId(Long userId);
+
+    @org.springframework.data.jpa.repository.Modifying
+    @org.springframework.data.jpa.repository.Query("UPDATE OrderRejection r SET r.deliveryPerson = null WHERE r.deliveryPerson.id = :userId")
+    void unlinkDeliveryPersonByUserId(Long userId);
 }

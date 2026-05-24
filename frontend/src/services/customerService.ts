@@ -6,6 +6,9 @@ export interface Customer {
   email: string;
   phone: string;
   address: string;
+  addressLabel?: string;
+  latitude?: number;
+  longitude?: number;
   sellerId?: number;
   sellerName?: string;
   visitDay?: string;
@@ -24,6 +27,7 @@ export const customerApi = {
   getById: (id: number) => api.get<Customer>(`/customers/${id}`),
   create: (customer: Omit<Customer, 'id'>) => api.post<Customer>('/customers', customer),
   update: (id: number, customer: Partial<Customer>) => api.put<Customer>(`/customers/${id}`, customer),
+  updateLocation: (id: number, location: { latitude: number; longitude: number; address?: string }) => api.patch<Customer>(`/customers/${id}/location`, location),
   delete: (id: number) => api.delete<void>(`/customers/${id}`),
   getMyCustomers: (params?: { visitDay?: string; zone?: string }) => {
     const visitDay = params?.visitDay ? `visitDay=${encodeURIComponent(params.visitDay)}` : '';

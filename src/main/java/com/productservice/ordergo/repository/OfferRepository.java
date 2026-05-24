@@ -30,6 +30,9 @@ public interface OfferRepository extends JpaRepository<Offer, Long> {
     @org.springframework.data.jpa.repository.Query("DELETE FROM OfferItem oi WHERE oi.product.id = :productId")
     void deleteOfferItemsByProductId(Long productId);
 
+    @org.springframework.data.jpa.repository.Query("SELECT COUNT(oi) FROM OfferItem oi WHERE oi.product.id = :productId")
+    long countOfferItemsByProductId(Long productId);
+
     @Query("SELECT o FROM Offer o LEFT JOIN FETCH o.items i LEFT JOIN FETCH i.product WHERE o.id = :id")
     java.util.Optional<Offer> findByIdWithItems(@org.springframework.data.repository.query.Param("id") Long id);
 }

@@ -1,6 +1,7 @@
 package com.productservice.ordergo.service.impl;
 
 import com.productservice.ordergo.dto.CustomerDTO;
+import com.productservice.ordergo.dto.CustomerLocationDTO;
 import com.productservice.ordergo.entity.Customer;
 import com.productservice.ordergo.exception.ResourceNotFoundException;
 import com.productservice.ordergo.repository.CustomerRepository;
@@ -23,6 +24,8 @@ public class CustomerServiceImpl implements CustomerService {
     private final CustomerRepository customerRepository;
     private final com.productservice.ordergo.repository.OrderRepository orderRepository;
     private final com.productservice.ordergo.repository.UserRepository userRepository;
+    private final com.productservice.ordergo.repository.InvoiceRepository invoiceRepository;
+    private final com.productservice.ordergo.repository.OrderRejectionRepository orderRejectionRepository;
 
     @Override
     public List<CustomerDTO> findAll() {
@@ -72,6 +75,9 @@ public class CustomerServiceImpl implements CustomerService {
         existing.setEmail(dto.getEmail());
         existing.setPhone(dto.getPhone());
         existing.setAddress(dto.getAddress());
+        existing.setAddressLabel(dto.getAddressLabel());
+        existing.setLatitude(dto.getLatitude());
+        existing.setLongitude(dto.getLongitude());
         existing.setVisitDay(dto.getVisitDay());
         existing.setZone(dto.getZone());
         existing.setVisitFrequency(dto.getVisitFrequency());
@@ -86,10 +92,11 @@ public class CustomerServiceImpl implements CustomerService {
 
         Customer saved = customerRepository.save(existing);
 
-        // Sync deliveryAddress on all orders of this customer so map/orders stay up to date
+        // Sync deliveryAddress (addressLabel) on all orders of this customer
         List<com.productservice.ordergo.entity.Order> orders = orderRepository.findByCustomerId(id);
         for (com.productservice.ordergo.entity.Order order : orders) {
-            order.setDeliveryAddress(saved.getAddress());
+            String label = saved.getAddressLabel() != null ? saved.getAddressLabel() : saved.getAddress();
+            order.setDeliveryAddress(label);
         }
         if (!orders.isEmpty()) {
             orderRepository.saveAll(orders);
@@ -104,12 +111,23 @@ public class CustomerServiceImpl implements CustomerService {
         if (!customerRepository.existsById(id)) {
             throw new ResourceNotFoundException("Cliente no encontrado con id: " + id);
         }
-        long orderCount = orderRepository.countByCustomerId(id);
-        if (orderCount > 0) {
-            throw new com.productservice.ordergo.exception.BusinessException(
-                "No se puede eliminar el cliente porque tiene " + orderCount + " pedido(s) asociado(s)."
-            );
+        // Desvincular el cliente de pedidos, facturas y rechazos (conserva el historial)
+        orderRepository.unlinkByCustomerId(id);
+        invoiceRepository.unlinkByCustomerId(id);
+        orderRejectionRepository.unlinkByCustomerId(id);
+        customerRepository.deleteById(id);
+    }
+
+    @Override
+    @Transactional
+    public void forceDelete(Long id) {
+        if (!customerRepository.existsById(id)) {
+            throw new ResourceNotFoundException("Cliente no encontrado con id: " + id);
         }
+        // Borrar en cascada todas las entidades dependientes
+        orderRejectionRepository.deleteByCustomerId(id);
+        invoiceRepository.deleteByCustomerId(id);
+        orderRepository.deleteByCustomerId(id);
         customerRepository.deleteById(id);
     }
 
@@ -126,6 +144,9 @@ public class CustomerServiceImpl implements CustomerService {
             .email(c.getEmail())
             .phone(c.getPhone())
             .address(c.getAddress())
+            .addressLabel(c.getAddressLabel())
+            .latitude(c.getLatitude())
+            .longitude(c.getLongitude())
             .visitDay(c.getVisitDay())
             .zone(c.getZone())
             .visitFrequency(c.getVisitFrequency());
@@ -142,6 +163,9 @@ public class CustomerServiceImpl implements CustomerService {
             .email(dto.getEmail())
             .phone(dto.getPhone())
             .address(dto.getAddress())
+            .addressLabel(dto.getAddressLabel())
+            .latitude(dto.getLatitude())
+            .longitude(dto.getLongitude())
             .visitDay(dto.getVisitDay())
             .zone(dto.getZone())
             .visitFrequency(dto.getVisitFrequency());
@@ -150,5 +174,45 @@ public class CustomerServiceImpl implements CustomerService {
             builder.seller(seller);
         }
         return builder.build();
+    }
+
+    @Override
+    @Transactional
+    public CustomerDTO updateLocation(Long id, CustomerLocationDTO dto) {
+        Customer existing = customerRepository.findById(id)
+            .orElseThrow(() -> new ResourceNotFoundException("Cliente no encontrado con id: " + id));
+        if (dto.getAddress() != null) {
+            existing.setAddress(dto.getAddress());
+        }
+        if (dto.getLatitude() != null) {
+            existing.setLatitude(dto.getLatitude());
+        }
+        if (dto.getLongitude() != null) {
+            existing.setLongitude(dto.getLongitude());
+        }
+        Customer saved = customerRepository.save(existing);
+
+        // Sync deliveryAddress (addressLabel), latitude, longitude on pending orders of this customer
+        List<com.productservice.ordergo.entity.Order> orders = orderRepository.findByCustomerId(id);
+        for (com.productservice.ordergo.entity.Order order : orders) {
+            if (order.getStatus() == com.productservice.ordergo.entity.OrderStatus.PENDIENTE ||
+                order.getStatus() == com.productservice.ordergo.entity.OrderStatus.EN_PREPARACION) {
+                if (dto.getAddress() != null) {
+                    String label = saved.getAddressLabel() != null ? saved.getAddressLabel() : saved.getAddress();
+                    order.setDeliveryAddress(label);
+                }
+                if (dto.getLatitude() != null) {
+                    order.setLatitude(dto.getLatitude());
+                }
+                if (dto.getLongitude() != null) {
+                    order.setLongitude(dto.getLongitude());
+                }
+            }
+        }
+        if (!orders.isEmpty()) {
+            orderRepository.saveAll(orders);
+        }
+
+        return toDTO(saved);
     }
 }

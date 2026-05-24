@@ -38,6 +38,10 @@ public class OrderDTO {
 
     private String deliveryAddress;
 
+    private Double latitude;
+
+    private Double longitude;
+
     private String paymentMethod;
 
     @NotEmpty(message = "El pedido debe tener al menos un item")

@@ -41,16 +41,21 @@ public class FileStorageService {
                 Files.createDirectories(targetDir);
             }
 
-            BufferedImage originalImage = ImageIO.read(file.getInputStream());
-            if (originalImage == null) {
-                throw new IllegalArgumentException("No se pudo leer la imagen");
-            }
-
-            String filename = UUID.randomUUID().toString() + ".jpg";
+            boolean isWebp = "image/webp".equalsIgnoreCase(contentType);
+            String filename = UUID.randomUUID().toString() + (isWebp ? ".webp" : ".jpg");
             Path targetPath = targetDir.resolve(filename);
 
-            BufferedImage resizedImage = resizeAndConvertToRgb(originalImage, MAX_WIDTH);
-            ImageIO.write(resizedImage, "jpg", targetPath.toFile());
+            if (isWebp) {
+                // Java's ImageIO doesn't support WEBP natively; save as-is
+                Files.copy(file.getInputStream(), targetPath);
+            } else {
+                BufferedImage originalImage = ImageIO.read(file.getInputStream());
+                if (originalImage == null) {
+                    throw new IllegalArgumentException("No se pudo leer la imagen");
+                }
+                BufferedImage resizedImage = resizeAndConvertToRgb(originalImage, MAX_WIDTH);
+                ImageIO.write(resizedImage, "jpg", targetPath.toFile());
+            }
 
             log.info("Imagen guardada: {}", targetPath);
             return "/uploads/" + subFolder + "/" + filename;

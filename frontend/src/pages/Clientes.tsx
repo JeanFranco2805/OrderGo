@@ -1,16 +1,31 @@
 import { useState, useEffect } from 'react';
-import { Plus, Search, Mail, Phone, Trash2, Eye, Pencil, MapPin, Download } from 'lucide-react';
+import { Plus, Search, Mail, Phone, Trash2, Eye, Pencil, MapPin, Download, Crosshair } from 'lucide-react';
 import { customerApi, type Customer } from '../services/customerService';
 import { userApi, type User } from '../services/userService';
 import { useApiCache, invalidateCache } from '../hooks/useApiCache';
 import { useRole } from '../hooks/useRole';
 import { getLocalDateString } from '../utils/date';
 import { exportToExcel } from '../utils/exportExcel';
+import { reverseGeocode } from '../services/geocodeService';
+import { getPrimaryKey } from '../services/maptilerKeys';
 import Modal from '../components/Modal';
 import ConfirmModal from '../components/ConfirmModal';
 import Pagination from '../components/Pagination';
-import AddressInput from '../components/AddressInput';
+import 'leaflet/dist/leaflet.css';
 import '../styles/pages.css';
+
+import { MapContainer, TileLayer, Marker, useMapEvents } from 'react-leaflet';
+import L from 'leaflet';
+import markerIcon from 'leaflet/dist/images/marker-icon.png';
+import markerShadow from 'leaflet/dist/images/marker-shadow.png';
+
+const DefaultPin = L.icon({
+  iconUrl: markerIcon,
+  shadowUrl: markerShadow,
+  iconSize: [25, 41],
+  iconAnchor: [12, 41],
+  popupAnchor: [1, -34],
+});
 
 const DIAS_SEMANA = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
 const FRECUENCIAS = ['Semanal', 'Quincenal', 'Mensual'];
@@ -38,7 +53,7 @@ export default function Clientes() {
   const totalPages = data?.totalPages ?? 0;
 
   const [showModal, setShowModal] = useState(false);
-  const [newClient, setNewClient] = useState<Partial<Customer>>({ name: '', email: '', phone: '', address: '', visitDay: '', zone: '', visitFrequency: '' });
+  const [newClient, setNewClient] = useState<Partial<Customer>>({ name: '', email: '', phone: '', addressLabel: '', visitDay: '', zone: '', visitFrequency: '' });
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
   const [errorModal, setErrorModal] = useState('');
 
@@ -47,6 +62,14 @@ export default function Clientes() {
   const [editClient, setEditClient] = useState<Partial<Customer>>({});
   const [editLoading, setEditLoading] = useState(false);
   const [sellers, setSellers] = useState<User[]>([]);
+
+  // Map pin modal state
+  const [showMapModal, setShowMapModal] = useState(false);
+  const [mapClient, setMapClient] = useState<Customer | null>(null);
+  const [mapLat, setMapLat] = useState<number>(10.9685);
+  const [mapLng, setMapLng] = useState<number>(-74.7813);
+  const [mapAddress, setMapAddress] = useState('');
+  const [mapLoading, setMapLoading] = useState(false);
 
   useEffect(() => {
     const timer = setTimeout(() => setPage(0), 400);
@@ -72,7 +95,7 @@ export default function Clientes() {
         c.name,
         c.email,
         c.phone || '',
-        c.address || '',
+        c.addressLabel || c.address || '',
         c.zone || '',
         c.visitDay || '',
         c.visitFrequency || '',
@@ -136,14 +159,49 @@ export default function Clientes() {
     if (!confirmDelete) return;
     try {
       await customerApi.delete(confirmDelete);
+      setConfirmDelete(null);
+      invalidateCache('customers-');
+      refresh();
+    } catch {
+      setErrorModal('Error al eliminar cliente');
+    }
+  };
+
+  const openMapModal = (c: Customer) => {
+    setMapClient(c);
+    setMapLat(c.latitude ?? 10.9685);
+    setMapLng(c.longitude ?? -74.7813);
+    setMapAddress(c.address || '');
+    setShowMapModal(true);
+  };
+
+  const handleMapSave = async () => {
+    if (!mapClient) return;
+    try {
+      setMapLoading(true);
+      await customerApi.updateLocation(mapClient.id, {
+        latitude: mapLat,
+        longitude: mapLng,
+        address: mapAddress || mapClient.address,
+      });
+      setShowMapModal(false);
       invalidateCache('customers-');
       refresh();
     } catch (err) {
-      setErrorModal('Error: ' + (err as Error).message);
+      setErrorModal('Error guardando ubicación: ' + (err as Error).message);
     } finally {
-      setConfirmDelete(null);
+      setMapLoading(false);
     }
   };
+
+  function MapClickHandler({ onClick }: { onClick: (lat: number, lng: number) => void }) {
+    useMapEvents({
+      click(e) {
+        onClick(e.latlng.lat, e.latlng.lng);
+      },
+    });
+    return null;
+  }
 
   return (
     <div>
@@ -248,6 +306,9 @@ export default function Clientes() {
                       {canEditClient() && !isVendedor && (
                         <button className="navbar-icon-btn" aria-label="Editar" onClick={() => openEdit(c)} style={{ padding: 6, borderRadius: 8, backgroundColor: '#eef2ff', color: '#4f46e5' }}><Pencil size={15} strokeWidth={1.5} /></button>
                       )}
+                      {canEditClient() && (
+                        <button className="navbar-icon-btn" aria-label="Ubicar en mapa" onClick={() => openMapModal(c)} style={{ padding: 6, borderRadius: 8, backgroundColor: '#ecfdf5', color: '#10b981' }}><Crosshair size={15} strokeWidth={1.5} /></button>
+                      )}
                       {canForceDeleteClient() && (
                         <button className="navbar-icon-btn" aria-label="Eliminar" onClick={() => handleDelete(c.id)} style={{ padding: 6, borderRadius: 8, backgroundColor: '#fef2f2', color: '#ef4444' }}><Trash2 size={15} strokeWidth={1.5} /></button>
                       )}
@@ -294,9 +355,19 @@ export default function Clientes() {
                 <div style={{ fontSize: '0.95rem', fontWeight: 700, marginTop: 4 }}>{selectedClient.phone || '—'}</div>
               </div>
             </div>
-            {selectedClient.address && (
+            {selectedClient.addressLabel && (
               <div style={{ padding: '10px 12px', borderRadius: 'var(--radius-md)', backgroundColor: '#eef2ff', fontSize: '0.85rem', color: 'var(--color-text-secondary)' }}>
-                <strong>Dirección:</strong> {selectedClient.address}
+                <strong>Dirección para el domiciliario:</strong> {selectedClient.addressLabel}
+              </div>
+            )}
+            {(selectedClient.latitude !== undefined && selectedClient.longitude !== undefined) && (
+              <div style={{ padding: '10px 12px', borderRadius: 'var(--radius-md)', backgroundColor: '#ecfdf5', fontSize: '0.85rem', color: 'var(--color-text-secondary)' }}>
+                <strong>Ubicación GPS:</strong> {selectedClient.latitude.toFixed(6)}, {selectedClient.longitude.toFixed(6)}
+              </div>
+            )}
+            {selectedClient.address && (
+              <div style={{ padding: '10px 12px', borderRadius: 'var(--radius-md)', backgroundColor: '#f8fafc', fontSize: '0.82rem', color: 'var(--color-text-muted)' }}>
+                <strong>Dirección del mapa:</strong> {selectedClient.address}
               </div>
             )}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
@@ -337,7 +408,16 @@ export default function Clientes() {
             <label>Teléfono</label>
             <input className="form-control" value={editClient.phone || ''} onChange={(e) => setEditClient({ ...editClient, phone: e.target.value })} />
           </div>
-          <AddressInput value={editClient.address || ''} onChange={(addr) => setEditClient({ ...editClient, address: addr })} label="Dirección" />
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label>Dirección para el domiciliario <span style={{ color: 'var(--color-text-muted)', fontSize: '0.75rem' }}>(esta es la que verá el repartidor)</span></label>
+            <textarea
+              className="form-control"
+              rows={2}
+              value={editClient.addressLabel || ''}
+              onChange={(e) => setEditClient({ ...editClient, addressLabel: e.target.value })}
+              placeholder="Ej: Cl. 25 # 48-102, Boston, Barranquilla"
+            />
+          </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <div className="form-group" style={{ marginBottom: 0 }}>
               <label>Zona / Barrio</label>
@@ -433,7 +513,16 @@ export default function Clientes() {
             <label>Teléfono</label>
             <input className="form-control" value={newClient.phone} onChange={(e) => setNewClient({ ...newClient, phone: e.target.value })} />
           </div>
-          <AddressInput value={newClient.address || ''} onChange={(addr) => setNewClient({ ...newClient, address: addr })} label="Dirección" />
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label>Dirección para el domiciliario <span style={{ color: 'var(--color-text-muted)', fontSize: '0.75rem' }}>(esta es la que verá el repartidor)</span></label>
+            <textarea
+              className="form-control"
+              rows={2}
+              value={newClient.addressLabel || ''}
+              onChange={(e) => setNewClient({ ...newClient, addressLabel: e.target.value })}
+              placeholder="Ej: Cl. 25 # 48-102, Boston, Barranquilla"
+            />
+          </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <div className="form-group" style={{ marginBottom: 0 }}>
               <label>Zona / Barrio</label>
@@ -502,6 +591,75 @@ export default function Clientes() {
           <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
             <button className="btn btn-outline" style={{ flex: 1, justifyContent: 'center' }} onClick={() => setShowModal(false)}>Cancelar</button>
             <button className="btn btn-primary" style={{ flex: 1, justifyContent: 'center' }} onClick={handleCreate}>Guardar</button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Modal Ubicar en mapa */}
+      <Modal isOpen={showMapModal} onClose={() => setShowMapModal(false)} title={`Ubicar cliente: ${mapClient?.name || ''}`} wide>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div style={{ fontSize: '0.85rem', color: 'var(--color-text-muted)', lineHeight: 1.5 }}>
+            <strong>Instrucciones:</strong> Haz clic o toca en el mapa para colocar el pin exactamente donde vive el cliente. Puedes arrastrar el mapa y usar la rueda del ratón para acercar/alejar. La dirección se actualiza automáticamente y puedes editarla antes de guardar.
+          </div>
+
+          <div style={{ borderRadius: 'var(--radius-md)', overflow: 'hidden', border: '1px solid var(--color-border)', flexShrink: 0 }}>
+            <MapContainer
+              center={[mapLat, mapLng]}
+              zoom={16}
+              style={{ height: 'clamp(300px, 55vh, 520px)', width: '100%' }}
+              scrollWheelZoom={true}
+            >
+              <TileLayer
+                attribution='&copy; <a href="https://www.maptiler.com/copyright/" target="_blank">MapTiler</a> | &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors'
+                url={`https://api.maptiler.com/maps/streets-v2/{z}/{x}/{y}.png?key=${getPrimaryKey()}`}
+              />
+              <MapClickHandler
+                onClick={async (lat, lng) => {
+                  setMapLat(lat);
+                  setMapLng(lng);
+                  setMapAddress('Cargando dirección...');
+                  const addr = await reverseGeocode(lat, lng);
+                  setMapAddress(addr || 'Dirección no encontrada');
+                }}
+              />
+              <Marker position={[mapLat, mapLng]} icon={DefaultPin} />
+            </MapContainer>
+          </div>
+
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+              gap: 14,
+              alignItems: 'start',
+            }}
+          >
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label>Dirección (puedes editarla)</label>
+              <textarea
+                className="form-control"
+                rows={3}
+                value={mapAddress}
+                onChange={(e) => setMapAddress(e.target.value)}
+                placeholder="Dirección exacta del cliente..."
+                style={{ resize: 'vertical', minHeight: 72 }}
+              />
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={{ padding: '10px 12px', borderRadius: 'var(--radius-md)', backgroundColor: 'var(--color-bg)', fontSize: '0.85rem', border: '1px solid var(--color-border)' }}>
+                <strong>Latitud:</strong> {mapLat.toFixed(6)}
+              </div>
+              <div style={{ padding: '10px 12px', borderRadius: 'var(--radius-md)', backgroundColor: 'var(--color-bg)', fontSize: '0.85rem', border: '1px solid var(--color-border)' }}>
+                <strong>Longitud:</strong> {mapLng.toFixed(6)}
+              </div>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', gap: 12, marginTop: 4, flexWrap: 'wrap' }}>
+            <button className="btn btn-outline" style={{ flex: '1 1 140px', justifyContent: 'center' }} onClick={() => setShowMapModal(false)}>Cancelar</button>
+            <button className="btn btn-primary" style={{ flex: '2 1 200px', justifyContent: 'center' }} onClick={handleMapSave} disabled={mapLoading}>
+              {mapLoading ? 'Guardando...' : 'Guardar ubicación'}
+            </button>
           </div>
         </div>
       </Modal>

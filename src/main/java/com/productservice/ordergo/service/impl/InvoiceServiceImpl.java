@@ -192,6 +192,9 @@ public class InvoiceServiceImpl implements InvoiceService {
         Invoice invoice = invoiceRepository.findById(invoiceId)
             .orElseThrow(() -> new ResourceNotFoundException("Factura no encontrada con id: " + invoiceId));
 
+        if (invoice.getCustomer() == null) {
+            throw new BusinessException("El cliente de esta factura ha sido eliminado");
+        }
         String phone = invoice.getCustomer().getPhone();
         if (phone == null || phone.isBlank()) {
             throw new BusinessException("El cliente no tiene número de teléfono registrado");
@@ -207,6 +210,9 @@ public class InvoiceServiceImpl implements InvoiceService {
         Invoice invoice = invoiceRepository.findById(invoiceId)
             .orElseThrow(() -> new ResourceNotFoundException("Factura no encontrada con id: " + invoiceId));
 
+        if (invoice.getCustomer() == null) {
+            throw new BusinessException("El cliente de esta factura ha sido eliminado");
+        }
         String phone = invoice.getCustomer().getPhone();
         if (phone == null || phone.isBlank()) {
             throw new BusinessException("El cliente no tiene número de teléfono registrado");
@@ -230,7 +236,7 @@ public class InvoiceServiceImpl implements InvoiceService {
         StringBuilder message = new StringBuilder();
         message.append("\ud83d\udcec *").append(businessName).append("*\n");
         message.append("━━━━━━━━━━━━━━━━━━━━\n\n");
-        message.append("\ud83d\udc4b ¡Hola *").append(invoice.getCustomer().getName()).append("*!\n\n");
+        message.append("\ud83d\udc4b ¡Hola *").append(invoice.getCustomer() != null ? invoice.getCustomer().getName() : "Cliente").append("*!\n\n");
         message.append("Te compartimos los detalles de tu factura:\n\n");
         message.append("\ud83d\udccb *Factura:* ").append(invoice.getInvoiceNumber()).append("\n");
         message.append("\ud83d\udcc5 *Fecha:* ").append(invoice.getInvoiceDate()).append("\n");
@@ -280,9 +286,9 @@ public class InvoiceServiceImpl implements InvoiceService {
         return InvoiceDTO.builder()
             .id(invoice.getId())
             .invoiceNumber(invoice.getInvoiceNumber())
-            .customerId(invoice.getCustomer().getId())
-            .customerName(invoice.getCustomer().getName())
-            .customerPhone(invoice.getCustomer().getPhone())
+            .customerId(invoice.getCustomer() != null ? invoice.getCustomer().getId() : null)
+            .customerName(invoice.getCustomer() != null ? invoice.getCustomer().getName() : "Cliente eliminado")
+            .customerPhone(invoice.getCustomer() != null ? invoice.getCustomer().getPhone() : null)
             .invoiceDate(invoice.getInvoiceDate())
             .subtotal(invoice.getSubtotal())
             .taxAmount(invoice.getTaxAmount())

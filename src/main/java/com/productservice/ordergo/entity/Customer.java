@@ -34,6 +34,13 @@ public class Customer {
     @Column(length = 250)
     private String address;
 
+    @Column(name = "address_label", length = 250)
+    private String addressLabel;
+
+    private Double latitude;
+
+    private Double longitude;
+
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "seller_id")
     private User seller;

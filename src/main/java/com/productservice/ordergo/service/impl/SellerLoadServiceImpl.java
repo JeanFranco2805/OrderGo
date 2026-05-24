@@ -353,83 +353,63 @@ public class SellerLoadServiceImpl implements SellerLoadService {
     @Override
     @Transactional
     public void reverseRejectionToPending(Long sellerId, Long orderId) {
+        Order order = orderRepository.findByIdWithItems(orderId)
+            .orElseThrow(() -> new ResourceNotFoundException("Pedido no encontrado con id: " + orderId));
         SellerLoad load = getOrCreateLoadEntity(sellerId);
-        List<OrderRejection> rejections = orderRejectionRepository.findByOrderId(orderId);
-        if (!rejections.isEmpty()) {
-            for (OrderRejection rejection : rejections) {
-                Product product = rejection.getProduct();
-                if (product == null) continue;
-                int pieces = rejection.getQuantity().intValue();
-                BigDecimal piecesBd = BigDecimal.valueOf(pieces);
-                SellerLoadItem loadItem = findLoadItemByProduct(load, product.getId());
-                if (loadItem != null) {
-                    loadItem.setQuantityRejected(loadItem.getQuantityRejected().subtract(piecesBd).max(BigDecimal.ZERO));
-                    loadItem.setQuantityLoaded(loadItem.getQuantityLoaded().add(piecesBd));
-                    sellerLoadItemRepository.save(loadItem);
-                } else {
-                    SellerLoadItem newItem = SellerLoadItem.builder()
-                        .sellerLoad(load)
-                        .product(product)
-                        .quantityLoaded(piecesBd)
-                        .quantityDelivered(BigDecimal.ZERO)
-                        .quantityRejected(BigDecimal.ZERO)
-                        .unitOfMeasure(SellerLoadItem.UnitOfMeasure.UNIDAD)
-                        .build();
-                    load.getItems().add(newItem);
-                    sellerLoadItemRepository.save(newItem);
+
+        // 1) Calculate total quantity per product in the order
+        java.util.Map<Long, Integer> totalPiecesMap = new java.util.HashMap<>();
+        for (OrderItem orderItem : order.getItems()) {
+            if (orderItem.getProduct() != null) {
+                int pieces = orderItem.getQuantity() * piecesPerUnit(orderItem.getProduct());
+                totalPiecesMap.merge(orderItem.getProduct().getId(), pieces, Integer::sum);
+            } else if (orderItem.getOffer() != null) {
+                Offer fullOffer = offerRepository.findByIdWithItems(orderItem.getOffer().getId()).orElse(null);
+                if (fullOffer != null) {
+                    for (OfferItem offerItem : fullOffer.getItems()) {
+                        int pieces = offerItem.getQuantity() * orderItem.getQuantity() * piecesPerUnit(offerItem.getProduct());
+                        totalPiecesMap.merge(offerItem.getProduct().getId(), pieces, Integer::sum);
+                    }
                 }
             }
-        } else {
-            // Fallback when no rejection records exist
-            Order order = orderRepository.findByIdWithItems(orderId)
-                .orElseThrow(() -> new ResourceNotFoundException("Pedido no encontrado con id: " + orderId));
-            for (OrderItem orderItem : order.getItems()) {
-                if (orderItem.getProduct() != null) {
-                    SellerLoadItem loadItem = findLoadItemByProduct(load, orderItem.getProduct().getId());
-                    int qty = orderItem.getQuantity() * piecesPerUnit(orderItem.getProduct());
-                    BigDecimal qtyBd = BigDecimal.valueOf(qty);
-                    if (loadItem != null) {
-                        loadItem.setQuantityRejected(loadItem.getQuantityRejected().subtract(qtyBd).max(BigDecimal.ZERO));
-                        loadItem.setQuantityLoaded(loadItem.getQuantityLoaded().add(qtyBd));
-                        sellerLoadItemRepository.save(loadItem);
-                    } else {
-                        SellerLoadItem newItem = SellerLoadItem.builder()
-                            .sellerLoad(load)
-                            .product(orderItem.getProduct())
-                            .quantityLoaded(qtyBd)
-                            .quantityDelivered(BigDecimal.ZERO)
-                            .quantityRejected(BigDecimal.ZERO)
-                            .unitOfMeasure(SellerLoadItem.UnitOfMeasure.UNIDAD)
-                            .build();
-                        load.getItems().add(newItem);
-                        sellerLoadItemRepository.save(newItem);
-                    }
-                } else if (orderItem.getOffer() != null) {
-                    Offer fullOffer = offerRepository.findByIdWithItems(orderItem.getOffer().getId()).orElse(null);
-                    if (fullOffer != null) {
-                        for (OfferItem offerItem : fullOffer.getItems()) {
-                            SellerLoadItem loadItem = findLoadItemByProduct(load, offerItem.getProduct().getId());
-                            int totalQty = offerItem.getQuantity() * orderItem.getQuantity() * piecesPerUnit(offerItem.getProduct());
-                            BigDecimal qtyBd = BigDecimal.valueOf(totalQty);
-                            if (loadItem != null) {
-                                loadItem.setQuantityRejected(loadItem.getQuantityRejected().subtract(qtyBd).max(BigDecimal.ZERO));
-                                loadItem.setQuantityLoaded(loadItem.getQuantityLoaded().add(qtyBd));
-                                sellerLoadItemRepository.save(loadItem);
-                            } else {
-                                SellerLoadItem newItem = SellerLoadItem.builder()
-                                    .sellerLoad(load)
-                                    .product(offerItem.getProduct())
-                                    .quantityLoaded(qtyBd)
-                                    .quantityDelivered(BigDecimal.ZERO)
-                                    .quantityRejected(BigDecimal.ZERO)
-                                    .unitOfMeasure(SellerLoadItem.UnitOfMeasure.UNIDAD)
-                                    .build();
-                                load.getItems().add(newItem);
-                                sellerLoadItemRepository.save(newItem);
-                            }
-                        }
-                    }
-                }
+        }
+
+        // 2) Calculate rejected quantity per product from OrderRejection records
+        List<OrderRejection> rejections = orderRejectionRepository.findByOrderId(orderId);
+        java.util.Map<Long, Integer> rejectedPiecesMap = new java.util.HashMap<>();
+        for (OrderRejection rejection : rejections) {
+            if (rejection.getProduct() != null) {
+                rejectedPiecesMap.merge(rejection.getProduct().getId(), rejection.getQuantity().intValue(), Integer::sum);
+            }
+        }
+
+        // 3) For each product in the order, move everything back to loaded:
+        //    loaded += total
+        //    delivered -= (total - rejected)
+        //    rejected -= rejected
+        for (java.util.Map.Entry<Long, Integer> entry : totalPiecesMap.entrySet()) {
+            Long productId = entry.getKey();
+            int total = entry.getValue();
+            int rejected = rejectedPiecesMap.getOrDefault(productId, 0);
+            int delivered = total - rejected;
+
+            SellerLoadItem loadItem = findLoadItemByProduct(load, productId);
+            if (loadItem != null) {
+                loadItem.setQuantityLoaded(loadItem.getQuantityLoaded().add(BigDecimal.valueOf(total)));
+                loadItem.setQuantityDelivered(loadItem.getQuantityDelivered().subtract(BigDecimal.valueOf(delivered)).max(BigDecimal.ZERO));
+                loadItem.setQuantityRejected(loadItem.getQuantityRejected().subtract(BigDecimal.valueOf(rejected)).max(BigDecimal.ZERO));
+                sellerLoadItemRepository.save(loadItem);
+            } else {
+                SellerLoadItem newItem = SellerLoadItem.builder()
+                    .sellerLoad(load)
+                    .product(productRepository.findById(productId).orElse(null))
+                    .quantityLoaded(BigDecimal.valueOf(total))
+                    .quantityDelivered(BigDecimal.ZERO)
+                    .quantityRejected(BigDecimal.ZERO)
+                    .unitOfMeasure(SellerLoadItem.UnitOfMeasure.UNIDAD)
+                    .build();
+                load.getItems().add(newItem);
+                sellerLoadItemRepository.save(newItem);
             }
         }
     }
@@ -654,6 +634,115 @@ public class SellerLoadServiceImpl implements SellerLoadService {
         }
     }
 
+    @Override
+    @Transactional
+    public void registerRejectionBatch(Long sellerId, RejectOrderBatchDTO dto) {
+        if (dto.getItems() == null || dto.getItems().isEmpty()) return;
+
+        Long orderId = dto.getItems().get(0).getOrderId();
+        Order order = orderRepository.findByIdWithItems(orderId)
+            .orElseThrow(() -> new ResourceNotFoundException("Pedido no encontrado con id: " + orderId));
+
+        Long effectiveSellerId = order.getDeliveryPerson() != null ? order.getDeliveryPerson().getId() : sellerId;
+        User deliveryPerson = userRepository.findById(effectiveSellerId).orElse(null);
+
+        String prevStatus = dto.getItems().get(0).getPreviousStatus();
+        boolean fromPending = prevStatus == null || "PENDIENTE".equals(prevStatus) || "EN_PREPARACION".equals(prevStatus);
+
+        // 1) Calculate TOTAL pieces per product in the entire order
+        java.util.Map<Long, Integer> totalPiecesMap = new java.util.HashMap<>();
+        for (OrderItem orderItem : order.getItems()) {
+            if (orderItem.getProduct() != null) {
+                int pieces = orderItem.getQuantity() * piecesPerUnit(orderItem.getProduct());
+                totalPiecesMap.merge(orderItem.getProduct().getId(), pieces, Integer::sum);
+            } else if (orderItem.getOffer() != null) {
+                Offer fullOffer = offerRepository.findByIdWithItems(orderItem.getOffer().getId()).orElse(null);
+                if (fullOffer != null) {
+                    for (OfferItem offerItem : fullOffer.getItems()) {
+                        int pieces = offerItem.getQuantity() * orderItem.getQuantity() * piecesPerUnit(offerItem.getProduct());
+                        totalPiecesMap.merge(offerItem.getProduct().getId(), pieces, Integer::sum);
+                    }
+                }
+            }
+        }
+
+        // 2) Calculate REJECTED pieces per product from the batch
+        java.util.Map<Long, Integer> rejectedPiecesMap = new java.util.HashMap<>();
+        java.util.List<OrderRejection> rejectionRecords = new java.util.ArrayList<>();
+
+        for (RejectOrderDTO item : dto.getItems()) {
+            if (item.getProductId() != null) {
+                OrderItem orderItem = order.getItems().stream()
+                    .filter(i -> i.getProduct() != null && i.getProduct().getId().equals(item.getProductId()))
+                    .findFirst()
+                    .orElseThrow(() -> new BusinessException("El producto no está en el pedido"));
+
+                int piecesPer = piecesPerUnit(orderItem.getProduct());
+                int rejectedPieces = item.getQuantity().intValue() * piecesPer;
+                rejectedPiecesMap.merge(item.getProductId(), rejectedPieces, Integer::sum);
+
+                rejectionRecords.add(OrderRejection.builder()
+                    .order(order)
+                    .product(orderItem.getProduct())
+                    .seller(order.getSeller())
+                    .deliveryPerson(deliveryPerson)
+                    .customer(order.getCustomer())
+                    .quantity(BigDecimal.valueOf(rejectedPieces))
+                    .reason(item.getReason())
+                    .build());
+
+            } else if (item.getOfferId() != null) {
+                OrderItem orderItem = order.getItems().stream()
+                    .filter(i -> i.getOffer() != null && i.getOffer().getId().equals(item.getOfferId()))
+                    .findFirst()
+                    .orElseThrow(() -> new BusinessException("El combo no está en el pedido"));
+
+                Offer fullOffer = offerRepository.findByIdWithItems(item.getOfferId())
+                    .orElseThrow(() -> new ResourceNotFoundException("Combo no encontrado"));
+
+                int rejectedComboQty = item.getQuantity().intValue();
+                for (OfferItem offerItem : fullOffer.getItems()) {
+                    Product product = offerItem.getProduct();
+                    int piecesPer = piecesPerUnit(product);
+                    int rejectedPieces = offerItem.getQuantity() * rejectedComboQty * piecesPer;
+                    rejectedPiecesMap.merge(product.getId(), rejectedPieces, Integer::sum);
+
+                    rejectionRecords.add(OrderRejection.builder()
+                        .order(order)
+                        .product(product)
+                        .seller(order.getSeller())
+                        .deliveryPerson(deliveryPerson)
+                        .customer(order.getCustomer())
+                        .quantity(BigDecimal.valueOf(rejectedPieces))
+                        .reason(item.getReason())
+                        .build());
+                }
+            }
+        }
+
+        // 3) For EVERY product in the order, move the FULL quantity from loaded -> delivered + rejected
+        // Products not explicitly rejected get delivered = total, rejected = 0
+        for (java.util.Map.Entry<Long, Integer> entry : totalPiecesMap.entrySet()) {
+            Long productId = entry.getKey();
+            int total = entry.getValue();
+            int rejected = rejectedPiecesMap.getOrDefault(productId, 0);
+            int delivered = total - rejected;
+
+            if (fromPending) {
+                // From PENDIENTE: move total from loaded -> delivered + rejected
+                applyLoadChange(effectiveSellerId, productId, -total, delivered, rejected);
+            } else {
+                // From ENTREGADO: move rejected from delivered -> rejected
+                applyLoadChange(effectiveSellerId, productId, 0, -rejected, rejected);
+            }
+        }
+
+        // Save all rejection records
+        if (!rejectionRecords.isEmpty()) {
+            orderRejectionRepository.saveAll(rejectionRecords);
+        }
+    }
+
     private void applyLoadChange(Long sellerId, Long productId, int loadedDelta, int deliveredDelta, int rejectedDelta) {
         java.util.Optional<SellerLoad> todayLoad = sellerLoadRepository.findActiveBySellerIdAndLoadDate(sellerId, LocalDate.now());
         if (todayLoad.isPresent() && applyToLoad(todayLoad.get(), productId, loadedDelta, deliveredDelta, rejectedDelta)) {
@@ -855,7 +944,19 @@ public class SellerLoadServiceImpl implements SellerLoadService {
         }
 
         Long sellerId = order.getDeliveryPerson().getId();
-        System.out.println("[DEBUG] removeOrderFromLoad: order=" + orderId + " seller=" + sellerId + " status=" + order.getStatus());
+        removeOrderFromLoadInternal(order, sellerId);
+    }
+
+    @Override
+    @Transactional
+    public void removeOrderFromLoadBySellerId(Long orderId, Long sellerId) {
+        Order order = orderRepository.findByIdWithItems(orderId)
+            .orElseThrow(() -> new ResourceNotFoundException("Pedido no encontrado con id: " + orderId));
+        removeOrderFromLoadInternal(order, sellerId);
+    }
+
+    private void removeOrderFromLoadInternal(Order order, Long sellerId) {
+        System.out.println("[DEBUG] removeOrderFromLoad: order=" + order.getId() + " seller=" + sellerId + " status=" + order.getStatus());
 
         // Search ALL loads for this delivery person, not just today's
         List<SellerLoad> allLoads = sellerLoadRepository.findBySellerId(sellerId);

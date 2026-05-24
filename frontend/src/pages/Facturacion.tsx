@@ -56,6 +56,7 @@ export default function Facturacion() {
   const [createDate, setCreateDate] = useState(getLocalDateString());
   const [createDiscountCode, setCreateDiscountCode] = useState('');
   const [createLoading, setCreateLoading] = useState(false);
+  const [paymentMethods, setPaymentMethods] = useState<string[]>([]);
 
   // Payment status on create
   const [paymentStatus, setPaymentStatus] = useState<'none' | 'full' | 'partial'>('none');
@@ -67,7 +68,7 @@ export default function Facturacion() {
 
   const [sendingIds, setSendingIds] = useState<Set<number>>(new Set());
   const [selectedInvoiceIds, setSelectedInvoiceIds] = useState<Set<number>>(new Set());
-  const [businessSettings, setBusinessSettings] = useState<{ businessName?: string; phone?: string; address?: string }>({});
+  const [businessSettings, setBusinessSettings] = useState<{ businessName?: string; phone?: string; address?: string; tax?: number }>({});
 
   useEffect(() => {
     businessSettingsApi.get()
@@ -79,6 +80,12 @@ export default function Facturacion() {
     const timer = setTimeout(() => setPage(0), 400);
     return () => clearTimeout(timer);
   }, [search]);
+
+  useEffect(() => {
+    getPaymentMethods()
+      .then((methods) => setPaymentMethods(methods))
+      .catch(() => setPaymentMethods([]));
+  }, []);
 
   const totalPending = invoices.filter((i) => i.status !== 'PAGADA').reduce((sum, i) => sum + i.balance, 0);
   const totalInvoiced = invoices.reduce((sum, i) => sum + i.amount, 0);
@@ -110,7 +117,7 @@ export default function Facturacion() {
 
   const selectedOrder = orders.find((o) => o.id === createOrderId);
   const invoicedOrderIds = new Set(allInvoices.map((i) => i.orderId).filter(Boolean));
-  const customerOrders = orders.filter((o) => o.customerId === createCustomerId && o.status !== 'CANCELADO' && !invoicedOrderIds.has(o.id));
+  const customerOrders = orders.filter((o) => o.customerId === createCustomerId && o.status !== 'CANCELADO' && o.status !== 'RECHAZADO' && !invoicedOrderIds.has(o.id));
 
   const handleCreate = async () => {
     if (!createCustomerId || !createOrderId) return;
@@ -701,9 +708,25 @@ export default function Facturacion() {
           )}
 
           {selectedOrder && (
-            <div style={{ padding: '12px 14px', borderRadius: 'var(--radius-md)', backgroundColor: '#eef2ff', fontSize: '0.88rem', display: 'flex', alignItems: 'center', gap: 8 }}>
-              <DollarSign size={16} strokeWidth={1.5} color="#4f46e5" />
-              <span style={{ color: 'var(--color-text-secondary)' }}>Monto del pedido: <strong>{formatCOP(selectedOrder.totalAmount)}</strong></span>
+            <div style={{ padding: '12px 14px', borderRadius: 'var(--radius-md)', backgroundColor: '#eef2ff', fontSize: '0.88rem', display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <DollarSign size={16} strokeWidth={1.5} color="#4f46e5" />
+                <span style={{ color: 'var(--color-text-secondary)' }}>Subtotal del pedido: <strong>{formatCOP(selectedOrder.totalAmount)}</strong></span>
+              </div>
+              {businessSettings.tax && businessSettings.tax > 0 && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 24 }}>
+                  <span style={{ color: 'var(--color-text-muted)', fontSize: '0.82rem' }}>
+                    Impuesto ({businessSettings.tax}%): {formatCOP(Math.round(selectedOrder.totalAmount * (businessSettings.tax / 100)))}
+                  </span>
+                </div>
+              )}
+              {businessSettings.tax && businessSettings.tax > 0 && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 24 }}>
+                  <span style={{ color: 'var(--color-text)', fontWeight: 700 }}>
+                    TOTAL A PAGAR: {formatCOP(Math.round(selectedOrder.totalAmount * (1 + businessSettings.tax / 100)))}
+                  </span>
+                </div>
+              )}
             </div>
           )}
 
@@ -730,7 +753,7 @@ export default function Facturacion() {
               <div className="form-group" style={{ marginBottom: 0 }}>
                 <label>Método de pago</label>
                 <select className="form-control" value={partialMethod} onChange={(e) => setPartialMethod(e.target.value)}>
-                  {getPaymentMethods().map((m) => (
+                  {paymentMethods.map((m) => (
                     <option key={m} value={m}>{m}</option>
                   ))}
                 </select>
@@ -742,7 +765,7 @@ export default function Facturacion() {
             <div className="form-group" style={{ marginBottom: 0 }}>
               <label>Método de pago</label>
               <select className="form-control" value={partialMethod} onChange={(e) => setPartialMethod(e.target.value)}>
-                {getPaymentMethods().map((m) => (
+                {paymentMethods.map((m) => (
                   <option key={m} value={m}>{m}</option>
                 ))}
               </select>
@@ -919,7 +942,7 @@ export default function Facturacion() {
             <div className="form-group" style={{ marginBottom: 0 }}>
               <label>Método de pago</label>
               <select className="form-control" value={abonoMethod} onChange={(e) => setAbonoMethod(e.target.value)}>
-                {getPaymentMethods().map((m) => (
+                {paymentMethods.map((m) => (
                   <option key={m} value={m}>{m}</option>
                 ))}
               </select>

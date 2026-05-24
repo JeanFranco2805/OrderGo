@@ -67,6 +67,13 @@ export default function Inventario() {
   const [showSupplierModal, setShowSupplierModal] = useState(false);
   const [newSupplier, setNewSupplier] = useState<Partial<Supplier>>({ name: '', email: '', phone: '', address: '' });
 
+  // Modal lista proveedores
+  const [showSuppliersListModal, setShowSuppliersListModal] = useState(false);
+  const [editSupplier, setEditSupplier] = useState<Supplier | null>(null);
+  const [editSupplierForm, setEditSupplierForm] = useState<Partial<Supplier>>({});
+  const [confirmDeleteSupplier, setConfirmDeleteSupplier] = useState<number | null>(null);
+  const [supplierSearch, setSupplierSearch] = useState('');
+
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
   const [confirmDeleteExpense, setConfirmDeleteExpense] = useState<number | null>(null);
   const [errorModal, setErrorModal] = useState('');
@@ -237,6 +244,36 @@ export default function Inventario() {
     }
   };
 
+  const openEditSupplier = (s: Supplier) => {
+    setEditSupplier(s);
+    setEditSupplierForm(s);
+  };
+
+  const saveSupplierEdit = async () => {
+    if (!editSupplier) return;
+    try {
+      await supplierApi.update(editSupplier.id, editSupplierForm);
+      setEditSupplier(null);
+      setEditSupplierForm({});
+      invalidateCache('inventory-');
+      refresh();
+    } catch (err) {
+      setErrorModal('Error al guardar proveedor: ' + (err as Error).message);
+    }
+  };
+
+  const doDeleteSupplier = async () => {
+    if (!confirmDeleteSupplier) return;
+    try {
+      await supplierApi.delete(confirmDeleteSupplier);
+      setConfirmDeleteSupplier(null);
+      invalidateCache('inventory-');
+      refresh();
+    } catch (err) {
+      setErrorModal('Error al eliminar proveedor: ' + (err as Error).message);
+    }
+  };
+
   const renderSupplierSelect = (value: number | undefined, onChange: (id: number | undefined) => void) => (
     <select className="form-control" value={value ?? ''} onChange={(e) => onChange(e.target.value ? Number(e.target.value) : undefined)}>
       <option value="">Sin proveedor</option>
@@ -263,7 +300,7 @@ export default function Inventario() {
           <div style={{ position: 'relative' }}>
             <input
               type="file"
-              accept="image/*"
+              accept="image/jpeg,image/png,image/webp,image/gif,image/bmp"
               id={`file-${label}`}
               style={{ display: 'none' }}
               onChange={(e) => {
@@ -303,8 +340,11 @@ export default function Inventario() {
               <Download size={18} strokeWidth={1.5} /> Exportar Excel
             </button>
           )}
+          <button className="btn btn-outline" onClick={() => setShowSuppliersListModal(true)}>
+            <Truck size={18} strokeWidth={1.5} /> Proveedores
+          </button>
           <button className="btn btn-outline" onClick={() => setShowSupplierModal(true)}>
-            <Truck size={18} strokeWidth={1.5} /> Nuevo proveedor
+            <Plus size={18} strokeWidth={1.5} /> Nuevo proveedor
           </button>
           <button className="btn btn-outline" onClick={() => setShowCompra(true)}>
             <DollarSign size={18} strokeWidth={1.5} /> Registrar compra
@@ -598,6 +638,91 @@ export default function Inventario() {
           </div>
         </div>
       </Modal>
+
+      {/* Modal Lista Proveedores */}
+      <Modal isOpen={showSuppliersListModal} onClose={() => { setShowSuppliersListModal(false); setEditSupplier(null); setSupplierSearch(''); }} title="Proveedores">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {editSupplier ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              <div className="form-group" style={{ marginBottom: 0 }}><label>Nombre</label><input className="form-control" value={editSupplierForm.name || ''} onChange={(e) => setEditSupplierForm({ ...editSupplierForm, name: e.target.value })} /></div>
+              <div className="form-group" style={{ marginBottom: 0 }}><label>Correo</label><input className="form-control" type="email" value={editSupplierForm.email || ''} onChange={(e) => setEditSupplierForm({ ...editSupplierForm, email: e.target.value })} /></div>
+              <div className="form-group" style={{ marginBottom: 0 }}><label>Teléfono</label><input className="form-control" value={editSupplierForm.phone || ''} onChange={(e) => setEditSupplierForm({ ...editSupplierForm, phone: e.target.value })} /></div>
+              <div className="form-group" style={{ marginBottom: 0 }}><label>Dirección</label><input className="form-control" value={editSupplierForm.address || ''} onChange={(e) => setEditSupplierForm({ ...editSupplierForm, address: e.target.value })} /></div>
+              <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
+                <button className="btn btn-outline" style={{ flex: 1, justifyContent: 'center' }} onClick={() => setEditSupplier(null)}>Cancelar</button>
+                <button className="btn btn-primary" style={{ flex: 1, justifyContent: 'center' }} onClick={saveSupplierEdit}>Guardar cambios</button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <input
+                  type="text"
+                  className="form-control"
+                  placeholder="Buscar proveedor..."
+                  value={supplierSearch}
+                  onChange={(e) => setSupplierSearch(e.target.value)}
+                />
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxHeight: '55vh', overflowY: 'auto', paddingRight: 4 }}>
+                {suppliers
+                  .filter((s) => s.name.toLowerCase().includes(supplierSearch.toLowerCase()) || (s.email || '').toLowerCase().includes(supplierSearch.toLowerCase()))
+                  .map((s) => (
+                    <div
+                      key={s.id}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: 12,
+                        padding: '14px 16px',
+                        borderRadius: 'var(--radius-md)',
+                        border: '1px solid var(--color-border-light)',
+                        backgroundColor: 'var(--color-bg)',
+                      }}
+                    >
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div style={{ fontWeight: 700, fontSize: '0.92rem', color: 'var(--color-text)', marginBottom: 4, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {s.name}
+                        </div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 12px', fontSize: '0.8rem', color: 'var(--color-text-secondary)' }}>
+                          {s.email && <span>{s.email}</span>}
+                          {s.phone && <span>{s.phone}</span>}
+                          {s.address && <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%' }}>{s.address}</span>}
+                          {!s.email && !s.phone && !s.address && <span style={{ color: 'var(--color-text-muted)' }}>Sin información de contacto</span>}
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                        <button className="navbar-icon-btn" aria-label="Editar" onClick={() => openEditSupplier(s)} style={{ padding: 8, borderRadius: 8, backgroundColor: '#eef2ff', color: '#4f46e5' }}>
+                          <Pencil size={16} strokeWidth={1.5} />
+                        </button>
+                        <button className="navbar-icon-btn" aria-label="Eliminar" onClick={() => setConfirmDeleteSupplier(s.id)} style={{ padding: 8, borderRadius: 8, backgroundColor: '#fef2f2', color: '#ef4444' }}>
+                          <Trash2 size={16} strokeWidth={1.5} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                {suppliers.filter((s) => s.name.toLowerCase().includes(supplierSearch.toLowerCase()) || (s.email || '').toLowerCase().includes(supplierSearch.toLowerCase())).length === 0 && (
+                  <div style={{ textAlign: 'center', color: 'var(--color-text-muted)', padding: '32px 16px', fontSize: '0.9rem' }}>
+                    No se encontraron proveedores
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      </Modal>
+
+      <ConfirmModal
+        isOpen={!!confirmDeleteSupplier}
+        onClose={() => setConfirmDeleteSupplier(null)}
+        onConfirm={doDeleteSupplier}
+        title="Eliminar proveedor"
+        message="¿Estás seguro de que deseas eliminar este proveedor?"
+        confirmText="Eliminar"
+        cancelText="Cancelar"
+        variant="danger"
+      />
     </div>
   );
 }

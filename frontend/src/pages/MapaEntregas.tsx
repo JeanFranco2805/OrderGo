@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react';
-import { MapPin, AlertTriangle, Crosshair, Navigation, Package } from 'lucide-react';
+import { MapPin, AlertTriangle, Crosshair, Navigation, Package, Layers, RefreshCw } from 'lucide-react';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet';
 import { orderApi, type Order } from '../services/orderService';
 import { formatCOP } from '../utils/currency';
+import { buildGeocodeAddress, buildGeocodeAddressWithHouse, parseAddress } from '../components/AddressInput';
+import GoogleMapView from '../components/GoogleMapView';
 import 'leaflet/dist/leaflet.css';
 import 'leaflet.markercluster/dist/MarkerCluster.css';
 import 'leaflet.markercluster/dist/MarkerCluster.Default.css';
@@ -51,6 +53,7 @@ interface GeoOrder extends Order {
   lat?: number;
   lng?: number;
   geocodeError?: boolean;
+  exact?: boolean;
 }
 
 // Helper to fly map to user location
@@ -80,6 +83,20 @@ const MUNICIPALITY_CENTERS: Record<string, [number, number]> = {
   barranquilla: [10.9685, -74.7813],
   soledad: [10.907, -74.765],
   malambo: [10.85, -74.75],
+  'puerto colombia': [10.85, -74.75],
+  galapa: [10.9, -74.85],
+  'sabanalarga': [10.63, -74.92],
+  usiacurí: [10.75, -75.12],
+  'baranoa': [10.96, -74.92],
+  'palmar de varela': [10.74, -74.75],
+  'campo de la cruz': [10.73, -74.88],
+  'candelaria': [10.46, -74.88],
+  'luruaco': [10.61, -75.14],
+  'manatí': [10.45, -74.96],
+  'repelón': [10.49, -75.13],
+  'santo tomás': [10.76, -74.91],
+  'suán': [10.33, -74.88],
+  'tubará': [10.87, -74.97],
 };
 
 function getMunicipalityFallback(addr: string): [number, number] | null {
@@ -90,69 +107,277 @@ function getMunicipalityFallback(addr: string): [number, number] | null {
   return null;
 }
 
-async function nominatimSearch(query: string): Promise<{ lat: string; lon: string } | null> {
+import { tryMaptilerWithKeys, getPrimaryKey } from '../services/maptilerKeys';
+
+const GOOGLE_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
+
+interface GoogleAddressComponent {
+  long_name: string;
+  short_name: string;
+  types: string[];
+}
+
+interface GoogleGeocodeResult {
+  geometry: {
+    location: { lat: number; lng: number };
+    location_type: string;
+  };
+  formatted_address: string;
+  address_components?: GoogleAddressComponent[];
+  types: string[];
+}
+
+function simplifyGoogleAddress(result: GoogleGeocodeResult): string {
+  const comps = result.address_components ?? [];
+  const get = (type: string) => comps.find((c) => c.types.includes(type))?.long_name ?? '';
+  const route = get('route');
+  const streetNumber = get('street_number');
+  const neighborhood = get('neighborhood') || get('sublocality_level_1') || get('political');
+  const locality = get('locality') || get('administrative_area_level_2');
+  const admin1 = get('administrative_area_level_1');
+
+  let parts: string[] = [];
+  if (route) parts.push(route);
+  if (streetNumber) parts.push(`# ${streetNumber}`);
+  if (neighborhood && neighborhood !== locality) parts.push(neighborhood);
+  if (locality) parts.push(locality);
+  if (admin1) parts.push(admin1);
+  return parts.join(', ');
+}
+
+function normalizeForGoogle(addr: string): string {
+  // Colombian address format: "Carrera 3A Sur #46K"
+  // Google Maps sometimes understands better with spaces: "Carrera 3A Sur # 46K"
+  // BUT for intersections in Colombia, explicit "esquina" or "&" works better
+  return addr
+    .replace(/#\s*/g, ' # ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function normalizeForGoogleEsquina(addr: string): string {
+  // "Carrera 3A Sur esquina Calle 46K" — sometimes Google understands this better
+  return addr
+    .replace(/#\s*/g, ' esquina ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function normalizeForGoogleAmpersand(addr: string): string {
+  // "Carrera 3A Sur & Calle 46K" — international format
+  return addr
+    .replace(/#\s*/g, ' & ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+const LOCATION_TYPE_PRIORITY: Record<string, number> = {
+  'ROOFTOP': 4,
+  'RANGE_INTERPOLATED': 3,
+  'GEOMETRIC_CENTER': 2,
+  'APPROXIMATE': 1,
+};
+
+function pickBestGoogleResult(results: GoogleGeocodeResult[]): GoogleGeocodeResult | null {
+  if (!results || results.length === 0) return null;
+  // Filter results that are actually in Atlántico
+  const inAtlantico = results.filter((r) => {
+    const loc = r.geometry.location;
+    return isInAtlantico(loc.lat, loc.lng);
+  });
+  const candidates = inAtlantico.length > 0 ? inAtlantico : results;
+  // Sort by location_type priority (higher = more precise)
+  candidates.sort((a, b) => {
+    const pa = LOCATION_TYPE_PRIORITY[a.geometry.location_type] ?? 0;
+    const pb = LOCATION_TYPE_PRIORITY[b.geometry.location_type] ?? 0;
+    return pb - pa;
+  });
+  return candidates[0];
+}
+
+async function googleGeocodeSearch(query: string): Promise<GoogleGeocodeResult | null> {
+  if (!GOOGLE_API_KEY) return null;
   try {
     const res = await fetch(
-      `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=1&countrycodes=co&accept-language=es`,
-      {
-        headers: {
-          'Accept-Language': 'es',
-          'User-Agent': 'OrderGo-SweetFlow/1.0 (contact@ordergo.local)',
-        },
-      }
+      `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(query)}&key=${GOOGLE_API_KEY}&region=co&language=es&components=administrative_area:Atlántico|country:CO`
     );
     if (!res.ok) return null;
     const json = await res.json();
-    if (json && json.length > 0) {
-      return { lat: json[0].lat, lon: json[0].lon };
+    if (json.status === 'OK' && json.results && json.results.length > 0) {
+      return pickBestGoogleResult(json.results);
     }
   } catch (e) {
-    // Nominatim error (network, timeout, bad JSON) — keep going
+    // Google error — keep going
   }
   return null;
 }
 
-function extractStreet(addr: string): string | null {
-  // Match "Carrera 4B Sur #48-1" → "Carrera 4B Sur"
-  const m = addr.match(/^(.+?)\s+#\s*/);
-  return m ? m[1].trim() : null;
+async function maptilerSearch(query: string): Promise<{ lat: number; lng: number } | null> {
+  return tryMaptilerWithKeys(async (key) => {
+    try {
+      const url = `https://api.maptiler.com/geocoding/${encodeURIComponent(query)}.json?key=${key}&language=es&limit=1&bbox=-75.2,10.5,-74.3,11.1`;
+      const res = await fetch(url);
+      if (!res.ok) {
+        if (res.status === 429) throw new Error('Rate limit');
+        return null;
+      }
+      const json = await res.json();
+      if (json.features && json.features.length > 0) {
+        const feature = json.features[0];
+        const [lng, lat] = feature.center;
+        if (isInAtlantico(lat, lng)) {
+          return { lat, lng };
+        }
+      }
+    } catch (e) {
+      if (e instanceof Error && e.message.includes('Rate limit')) throw e;
+    }
+    return null;
+  });
+}
+
+async function maptilerReverseGeocode(lat: number, lng: number): Promise<string | null> {
+  return tryMaptilerWithKeys(async (key) => {
+    try {
+      const url = `https://api.maptiler.com/geocoding/${lng},${lat}.json?key=${key}&language=es&limit=1`;
+      const res = await fetch(url);
+      if (!res.ok) {
+        if (res.status === 429) throw new Error('Rate limit');
+        return null;
+      }
+      const json = await res.json();
+      if (json.features && json.features.length > 0) {
+        return json.features[0].place_name;
+      }
+    } catch (e) {
+      if (e instanceof Error && e.message.includes('Rate limit')) throw e;
+    }
+    return null;
+  });
 }
 
 function extractCity(addr: string): string | null {
   // "Carrera 4B Sur #48-1, Barranquilla, Atlántico, Colombia" → "Barranquilla"
   const parts = addr.split(',').map((s) => s.trim());
   if (parts.length >= 3) {
-    // parts[0] = street, parts[1] = city, parts[2] = state
     return parts[1];
   }
   if (parts.length === 2) return parts[1];
   return null;
 }
 
-async function geocodeAddress(addr: string): Promise<{ lat: number; lng: number; exact?: boolean } | { geocodeError: true; fallbackLat: number; fallbackLng: number }> {
-  const fullQuery = addr.toLowerCase().endsWith(', colombia') ? addr : addr + ', Colombia';
+function isInAtlantico(lat: number, lng: number): boolean {
+  return lat > 10.5 && lat < 11.2 && lng > -75.2 && lng < -74.3;
+}
 
-  // 1) Try full address
-  const full = await nominatimSearch(fullQuery);
-  if (full) return { lat: parseFloat(full.lat), lng: parseFloat(full.lon), exact: true };
+function isPreciseEnough(result: GoogleGeocodeResult): boolean {
+  const type = result.geometry.location_type;
+  // ROOFTOP or RANGE_INTERPOLATED means we found the actual intersection/house
+  // APPROXIMATE usually means "we only found the street, not the specific point"
+  return type === 'ROOFTOP' || type === 'RANGE_INTERPOLATED' || type === 'GEOMETRIC_CENTER';
+}
 
-  // 2) Try street only (drop house number after #)
-  const streetOnly = extractStreet(addr);
-  if (streetOnly) {
-    const city = extractCity(addr);
-    const streetQuery = city ? `${streetOnly}, ${city}, Atlántico, Colombia` : `${streetOnly}, Colombia`;
-    const streetRes = await nominatimSearch(streetQuery);
-    if (streetRes) return { lat: parseFloat(streetRes.lat), lng: parseFloat(streetRes.lon) };
+function buildGeocodeQuery(addr: string): { query: string; queryWithHouse: string } {
+  // Primary: use structured parser (strips barrio/urbanización automatically)
+  const parts = parseAddress(addr);
+  let queryWithHouse = buildGeocodeAddressWithHouse(parts);
+  let query = buildGeocodeAddress(parts);
+
+  // If structured parser failed, extract intersection from raw string
+  if (!query) {
+    const match = addr.match(/(Calle|Carrera)\s+(\d+)([A-Z])?\s*(?:Bis)?\s*#\s*(?:Calle|Carrera)?\s*(\d+)([A-Z])?/i);
+    if (match) {
+      const tipoVia = match[1];
+      const numeroVia = match[2];
+      const letraVia = match[3] || '';
+      const numeral = match[4];
+      const letraNumeral = match[5] || '';
+      const tipoSec = tipoVia === 'Calle' ? 'Carrera' : 'Calle';
+      const municipioMatch = addr.match(/(Barranquilla|Soledad|Malambo)/i);
+      const municipio = municipioMatch ? municipioMatch[1] : 'Barranquilla';
+      query = `${tipoVia} ${numeroVia}${letraVia} # ${tipoSec} ${numeral}${letraNumeral}, ${municipio}, Atlántico, Colombia`;
+      queryWithHouse = query;
+    } else {
+      // Last resort: strip barrio/urbanización prefix and use raw remainder
+      const cleaned = addr.replace(/^(Urbanizaci[oó]n|Conjunto|Barrio|Urb\.?)\s*[^,]+,\s*/i, '');
+      query = cleaned || addr;
+      queryWithHouse = query;
+    }
   }
 
-  // 3) Try city center
+  if (query && !query.toLowerCase().endsWith(', colombia')) query += ', Colombia';
+  if (queryWithHouse && !queryWithHouse.toLowerCase().endsWith(', colombia')) queryWithHouse += ', Colombia';
+
+  return { query, queryWithHouse };
+}
+
+async function geocodeAddress(addr: string): Promise<{ lat: number; lng: number; exact?: boolean } | { geocodeError: true; fallbackLat: number; fallbackLng: number }> {
+  const { query, queryWithHouse } = buildGeocodeQuery(addr);
+
+  // 1) MapTiler with house number (more precise)
+  if (queryWithHouse && queryWithHouse !== query) {
+    const mtHouse = await maptilerSearch(queryWithHouse);
+    if (mtHouse) return { lat: mtHouse.lat, lng: mtHouse.lng, exact: true };
+  }
+
+  // 2) MapTiler intersection (no house number) — primary geocoder
+  if (query) {
+    const mtInter = await maptilerSearch(query);
+    if (mtInter) return { lat: mtInter.lat, lng: mtInter.lng, exact: true };
+  }
+
+  // 3) Google with house number
+  if (queryWithHouse && queryWithHouse !== query && GOOGLE_API_KEY) {
+    const googleFormatsWithHouse = [
+      normalizeForGoogle(queryWithHouse),
+      normalizeForGoogleEsquina(queryWithHouse),
+      normalizeForGoogleAmpersand(queryWithHouse),
+    ];
+    for (const q of googleFormatsWithHouse) {
+      const res = await googleGeocodeSearch(q);
+      if (res && isInAtlantico(res.geometry.location.lat, res.geometry.location.lng)) {
+        const loc = res.geometry.location;
+        const locType = res.geometry.location_type;
+        if (isPreciseEnough(res)) return { lat: loc.lat, lng: loc.lng, exact: locType === 'ROOFTOP' };
+      }
+    }
+  }
+
+  // 4) Google intersection (no house number)
+  if (query && GOOGLE_API_KEY) {
+    const googleFormats = [
+      normalizeForGoogle(query),
+      normalizeForGoogleEsquina(query),
+      normalizeForGoogleAmpersand(query),
+    ];
+    const googleResults: GoogleGeocodeResult[] = [];
+    for (const q of googleFormats) {
+      const res = await googleGeocodeSearch(q);
+      if (res && isInAtlantico(res.geometry.location.lat, res.geometry.location.lng)) {
+        googleResults.push(res);
+      }
+    }
+    if (googleResults.length > 0) {
+      googleResults.sort((a, b) => {
+        const pa = LOCATION_TYPE_PRIORITY[a.geometry.location_type] ?? 0;
+        const pb = LOCATION_TYPE_PRIORITY[b.geometry.location_type] ?? 0;
+        return pb - pa;
+      });
+      const best = googleResults[0];
+      const loc = best.geometry.location;
+      if (isPreciseEnough(best)) return { lat: loc.lat, lng: loc.lng, exact: best.geometry.location_type === 'ROOFTOP' };
+      return { lat: loc.lat, lng: loc.lng };
+    }
+  }
+
+  // 5) City center fallback via MapTiler
   const city = extractCity(addr);
   if (city) {
-    const cityRes = await nominatimSearch(`${city}, Atlántico, Colombia`);
-    if (cityRes) return { lat: parseFloat(cityRes.lat), lng: parseFloat(cityRes.lon) };
+    const cityRes = await maptilerSearch(`${city}, Atlántico, Colombia`);
+    if (cityRes) return { lat: cityRes.lat, lng: cityRes.lng };
   }
 
-  // 4) Hardcoded municipality centers — GUARANTEED to return coordinates for known cities
+  // 6) Hardcoded municipality centers
   const hardcoded = getMunicipalityFallback(addr);
   if (hardcoded) {
     return { geocodeError: true, fallbackLat: hardcoded[0], fallbackLng: hardcoded[1] };
@@ -162,68 +387,165 @@ async function geocodeAddress(addr: string): Promise<{ lat: number; lng: number;
   return { geocodeError: true, fallbackLat: 10.9685, fallbackLng: -74.7813 };
 }
 
+async function reverseGeocode(lat: number, lng: number): Promise<string | null> {
+  // 1) Try MapTiler reverse geocoding first
+  const mtResult = await maptilerReverseGeocode(lat, lng);
+  if (mtResult) return mtResult;
+
+  // 2) Fallback to Google
+  if (GOOGLE_API_KEY) {
+    try {
+      const res = await fetch(
+        `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${GOOGLE_API_KEY}&region=co&language=es&result_type=street_address|route`
+      );
+      if (res.ok) {
+        const json = await res.json();
+        if (json.status === 'OK' && json.results && json.results.length > 0) {
+          const result: GoogleGeocodeResult = json.results[0];
+          return simplifyGoogleAddress(result);
+        }
+      }
+    } catch {
+      // fall through
+    }
+  }
+
+  // 3) Last resort: Nominatim
+  try {
+    const res = await fetch(
+      `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&accept-language=es`,
+      {
+        headers: {
+          'Accept-Language': 'es',
+          'User-Agent': 'OrderGo-SweetFlow/1.0 (contact@ordergo.local)',
+        },
+      }
+    );
+    if (res.ok) {
+      const json = await res.json();
+      if (json && json.display_name) {
+        return json.display_name;
+      }
+    }
+  } catch {
+    // fall through
+  }
+  return null;
+}
+
 export default function MapaEntregas() {
   const [orders, setOrders] = useState<GeoOrder[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const [userAddress, setUserAddress] = useState<string>('');
   const [userError, setUserError] = useState('');
   const [flyTarget, setFlyTarget] = useState<[number, number] | undefined>(undefined);
   const [selectedRoute, setSelectedRoute] = useState<number | null>(null);
+  const [tileLayer, setTileLayer] = useState<'maptiler' | 'osm' | 'esri' | 'carto' | 'google'>('maptiler');
 
-  useEffect(() => {
-    const load = async () => {
-      try {
-        setLoading(true);
-        const data = await orderApi.getPendingDeliveries();
-        const withCoords: GeoOrder[] = [];
-        for (const o of data) {
-          if (!o.deliveryAddress) continue;
-          try {
-            const result = await geocodeAddress(o.deliveryAddress.trim());
-            if ('geocodeError' in result) {
-              withCoords.push({
-                ...o,
-                geocodeError: true,
-                lat: result.fallbackLat,
-                lng: result.fallbackLng,
-              });
-            } else {
-              withCoords.push({ ...o, lat: result.lat, lng: result.lng });
-            }
-          } catch {
-            // If everything fails even with try/catch, force Barranquilla center
+  const TILE_LAYERS = {
+    maptiler: {
+      name: 'MapTiler Calles',
+      url: `https://api.maptiler.com/maps/streets-v2/{z}/{x}/{y}.png?key=${getPrimaryKey()}`,
+      attribution: '&copy; <a href="https://www.maptiler.com/copyright/" target="_blank">MapTiler</a> | &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors',
+    },
+    osm: {
+      name: 'OpenStreetMap',
+      url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors',
+    },
+    esri: {
+      name: 'Esri Satélite',
+      url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+      attribution: '&copy; <a href="https://www.esri.com/" target="_blank">Esri</a> | Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community',
+    },
+    carto: {
+      name: 'CartoDB Claro',
+      url: 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions" target="_blank">CARTO</a>',
+    },
+    google: {
+      name: 'Google Maps',
+      url: '',
+      attribution: '',
+    },
+  };
+
+  const loadOrders = async () => {
+    try {
+      setLoading(true);
+      const data = await orderApi.getPendingDeliveries();
+      const withCoords: GeoOrder[] = [];
+      for (const o of data) {
+        if (o.latitude !== undefined && o.longitude !== undefined) {
+          // Use saved coordinates from the order (most precise)
+          withCoords.push({ ...o, lat: o.latitude, lng: o.longitude, exact: true });
+          continue;
+        }
+        if (!o.deliveryAddress) continue;
+        try {
+          const result = await geocodeAddress(o.deliveryAddress.trim());
+          if ('geocodeError' in result) {
             withCoords.push({
               ...o,
               geocodeError: true,
-              lat: 10.9685,
-              lng: -74.7813,
+              lat: result.fallbackLat,
+              lng: result.fallbackLng,
             });
+          } else {
+            withCoords.push({ ...o, lat: result.lat, lng: result.lng });
           }
-          // Nominatim policy: max 1 request per second
-          await new Promise((r) => setTimeout(r, 1100));
+        } catch {
+          withCoords.push({
+            ...o,
+            geocodeError: true,
+            lat: 10.9685,
+            lng: -74.7813,
+          });
         }
-        setOrders(withCoords);
-      } catch {
-        setError('No se pudo cargar los pedidos pendientes.');
-      } finally {
-        setLoading(false);
+        await new Promise((r) => setTimeout(r, 300));
+      }
+      setOrders(withCoords);
+    } catch {
+      setError('No se pudo cargar los pedidos pendientes.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadOrders();
+  }, []);
+
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        loadOrders();
       }
     };
-    load();
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => document.removeEventListener('visibilitychange', handleVisibility);
   }, []);
 
   const locateUser = () => {
     setUserError('');
+    setUserAddress('');
     if (!navigator.geolocation) {
       setUserError('Tu navegador no soporta geolocalización.');
       return;
     }
     navigator.geolocation.getCurrentPosition(
-      (pos) => {
+      async (pos) => {
         const loc = { lat: pos.coords.latitude, lng: pos.coords.longitude };
         setUserLocation(loc);
         setFlyTarget([loc.lat, loc.lng]);
+        const address = await reverseGeocode(loc.lat, loc.lng);
+        if (address) {
+          setUserAddress(address);
+        } else {
+          setUserAddress('No se pudo obtener la dirección de esta ubicación');
+        }
       },
       (err) => {
         if (err.code === 1) setUserError('Permiso de ubicación denegado. Activa la ubicación en tu navegador.');
@@ -262,9 +584,27 @@ export default function MapaEntregas() {
           <h1>Mapa de entregas</h1>
           <p>Ubicación de pedidos pendientes y en preparación</p>
         </div>
-        <button className="btn btn-primary" onClick={locateUser}>
-          <Crosshair size={18} strokeWidth={1.5} /> Mi ubicación
-        </button>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <Layers size={16} strokeWidth={1.5} color="var(--color-text-muted)" />
+            <select
+              className="form-control"
+              value={tileLayer}
+              onChange={(e) => setTileLayer(e.target.value as 'maptiler' | 'osm' | 'esri' | 'carto' | 'google')}
+              style={{ width: 160, fontSize: '0.85rem', padding: '6px 10px' }}
+            >
+              {Object.entries(TILE_LAYERS).map(([key, layer]) => (
+                <option key={key} value={key}>{layer.name}</option>
+              ))}
+            </select>
+          </div>
+          <button className="btn btn-outline" onClick={loadOrders} disabled={loading}>
+            <RefreshCw size={18} strokeWidth={1.5} /> {loading ? 'Recargando...' : 'Recargar'}
+          </button>
+          <button className="btn btn-primary" onClick={locateUser}>
+            <Crosshair size={18} strokeWidth={1.5} /> Mi ubicación
+          </button>
+        </div>
       </div>
 
       {error && (
@@ -276,6 +616,13 @@ export default function MapaEntregas() {
       {userError && (
         <div style={{ padding: '12px 16px', borderRadius: 'var(--radius-md)', backgroundColor: '#fffbeb', color: '#b45309', fontSize: '0.88rem', marginBottom: 16 }}>
           {userError}
+        </div>
+      )}
+
+      {userAddress && (
+        <div style={{ padding: '12px 16px', borderRadius: 'var(--radius-md)', backgroundColor: '#ecfdf5', color: '#047857', fontSize: '0.88rem', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <MapPin size={16} strokeWidth={1.5} />
+          <span><strong>Tu ubicación:</strong> {userAddress}</span>
         </div>
       )}
 
@@ -306,58 +653,72 @@ export default function MapaEntregas() {
             <h2>Sin pedidos pendientes</h2>
             <p>No hay pedidos con dirección de entrega para mostrar en el mapa</p>
           </div>
+        ) : tileLayer === 'google' ? (
+          <GoogleMapView
+            center={{ lat: center[0], lng: center[1] }}
+            zoom={13}
+            markers={validOrders.map((o) => ({
+              id: o.id,
+              lat: o.lat!,
+              lng: o.lng!,
+              title: `${o.orderNumber} - ${o.customerName}`,
+              color: o.geocodeError ? '#ef4444' : '#fbbf24',
+            }))}
+            userLocation={userLocation}
+            routeLine={routePositions.length === 2 ? routePositions.map((p) => ({ lat: p[0], lng: p[1] })) : undefined}
+          />
         ) : (
           <MapContainer center={center} zoom={13} style={{ height: 500, width: '100%' }}>
-            <TileLayer
-              attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-            />
-            <MapController flyTo={flyTarget} />
+              <TileLayer
+                attribution={TILE_LAYERS[tileLayer].attribution}
+                url={TILE_LAYERS[tileLayer].url}
+              />
+              <MapController flyTo={flyTarget} />
 
-            {/* User location marker */}
-            {userLocation && (
-              <Marker position={[userLocation.lat, userLocation.lng]} icon={blueIcon}>
-                <Popup><strong>Tu ubicación</strong></Popup>
-              </Marker>
-            )}
-
-            {/* Route line */}
-            {routePositions.length === 2 && (
-              <Polyline positions={routePositions} color="#4f46e5" weight={4} opacity={0.8} dashArray="10, 10" />
-            )}
-
-            {/* Order markers with clustering */}
-            <MarkerClusterGroup>
-              {validOrders.map((o) => (
-                <Marker key={o.id} position={[o.lat!, o.lng!]} icon={yellowIcon}>
-                  <Popup>
-                    <div style={{ minWidth: 220 }}>
-                      <div style={{ fontWeight: 700, marginBottom: 6 }}>{o.orderNumber}</div>
-                      <div style={{ fontSize: '0.85rem', color: 'var(--color-text-secondary)', marginBottom: 4 }}>{o.customerName}</div>
-                      <div style={{ fontSize: '0.82rem', color: 'var(--color-text-muted)', marginBottom: 8 }}>{o.deliveryAddress}</div>
-                      {o.geocodeError && (
-                        <div style={{ padding: '6px 8px', borderRadius: 6, backgroundColor: '#fffbeb', color: '#b45309', fontSize: '0.75rem', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
-                          <AlertTriangle size={12} strokeWidth={1.5} />
-                          Ubicación aproximada (centro del municipio)
-                        </div>
-                      )}
-                      <div style={{ fontWeight: 700, color: 'var(--color-accent)', marginBottom: 10 }}>{formatCOP(o.totalAmount)}</div>
-                      {userLocation && (
-                        <button
-                          className="btn btn-primary"
-                          style={{ width: '100%', justifyContent: 'center', padding: '6px 10px', fontSize: '0.8rem' }}
-                          onClick={() => setSelectedRoute(o.id)}
-                        >
-                          <Navigation size={14} strokeWidth={1.5} /> Ver ruta ({haversine(userLocation.lat, userLocation.lng, o.lat!, o.lng!).toFixed(2)} km)
-                        </button>
-                      )}
-                    </div>
-                  </Popup>
+              {/* User location marker */}
+              {userLocation && (
+                <Marker position={[userLocation.lat, userLocation.lng]} icon={blueIcon}>
+                  <Popup><strong>Tu ubicación</strong></Popup>
                 </Marker>
-              ))}
-            </MarkerClusterGroup>
-          </MapContainer>
-        )}
+              )}
+
+              {/* Route line */}
+              {routePositions.length === 2 && (
+                <Polyline positions={routePositions} color="#4f46e5" weight={4} opacity={0.8} dashArray="10, 10" />
+              )}
+
+              {/* Order markers with clustering */}
+              <MarkerClusterGroup>
+                {validOrders.map((o) => (
+                  <Marker key={o.id} position={[o.lat!, o.lng!]} icon={yellowIcon}>
+                    <Popup>
+                      <div style={{ minWidth: 220 }}>
+                        <div style={{ fontWeight: 700, marginBottom: 6 }}>{o.orderNumber}</div>
+                        <div style={{ fontSize: '0.85rem', color: 'var(--color-text-secondary)', marginBottom: 4 }}>{o.customerName}</div>
+                        <div style={{ fontSize: '0.82rem', color: 'var(--color-text-muted)', marginBottom: 8 }}>{o.deliveryAddress}</div>
+                        {o.geocodeError && (
+                          <div style={{ padding: '6px 8px', borderRadius: 6, backgroundColor: '#fffbeb', color: '#b45309', fontSize: '0.75rem', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <AlertTriangle size={12} strokeWidth={1.5} />
+                            Ubicación aproximada (centro del municipio)
+                          </div>
+                        )}
+                        <div style={{ fontWeight: 700, color: 'var(--color-accent)', marginBottom: 10 }}>{formatCOP(o.totalAmount)}</div>
+                        {userLocation && (
+                          <button
+                            className="btn btn-primary"
+                            style={{ width: '100%', justifyContent: 'center', padding: '6px 10px', fontSize: '0.8rem' }}
+                            onClick={() => setSelectedRoute(o.id)}
+                          >
+                            <Navigation size={14} strokeWidth={1.5} /> Ver ruta ({haversine(userLocation.lat, userLocation.lng, o.lat!, o.lng!).toFixed(2)} km)
+                          </button>
+                        )}
+                      </div>
+                    </Popup>
+                  </Marker>
+                ))}
+              </MarkerClusterGroup>
+            </MapContainer>
+          )}
       </div>
 
       {/* Orders list below map */}

@@ -13,6 +13,8 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.util.List;
+
 @RestController
 @RequestMapping("/api/v1/inventory")
 @RequiredArgsConstructor
@@ -42,6 +44,11 @@ public class InventoryController {
     @GetMapping("/{id}")
     public ResponseEntity<InventoryItemDTO> getById(@PathVariable Long id) {
         return ResponseEntity.ok(inventoryItemService.findById(id));
+    }
+
+    @GetMapping("/unlinked")
+    public ResponseEntity<List<InventoryItemDTO>> getUnlinked() {
+        return ResponseEntity.ok(inventoryItemService.findUnlinked());
     }
 
     @PostMapping

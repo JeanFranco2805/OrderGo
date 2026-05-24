@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Plus, Search, Pencil, Eye, Package, Trash2, Upload, X, Download } from 'lucide-react';
+import { Plus, Search, Pencil, Eye, Package, Trash2, Upload, X, Download, DollarSign } from 'lucide-react';
 import { formatCOP } from '../utils/currency';
 import { getLocalDateString } from '../utils/date';
 import { productApi, type Product } from '../services/productService';
@@ -106,8 +106,8 @@ export default function Productos() {
   const openCreate = async () => {
     setShowCreate(true);
     try {
-      const res = await inventoryApi.getAll({ size: 1000 });
-      setInventoryItems(res.content);
+      const res = await inventoryApi.getUnlinked();
+      setInventoryItems(res);
     } catch {
       setInventoryItems([]);
     }
@@ -189,7 +189,7 @@ export default function Productos() {
           <div style={{ position: 'relative' }}>
             <input
               type="file"
-              accept="image/*"
+              accept="image/jpeg,image/png,image/webp,image/gif,image/bmp"
               id={`file-${label}`}
               style={{ display: 'none' }}
               onChange={(e) => {
@@ -407,6 +407,10 @@ export default function Productos() {
 
           {selectedInventoryItem && (
             <>
+              <div style={{ padding: '10px 12px', borderRadius: 'var(--radius-md)', backgroundColor: '#fffbeb', fontSize: '0.85rem', color: 'var(--color-text-secondary)', display: 'flex', alignItems: 'center', gap: 8 }}>
+                <DollarSign size={14} strokeWidth={1.5} color="#b45309" />
+                <span><strong>Precio de compra:</strong> {formatCOP(selectedInventoryItem.costPrice || 0)}</span>
+              </div>
               <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
                 <div style={{ width: 80, height: 80, borderRadius: 'var(--radius-md)', overflow: 'hidden', border: '1px solid var(--color-border)', flexShrink: 0, backgroundColor: 'var(--color-bg)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                   {createPreview ? (
@@ -423,7 +427,7 @@ export default function Productos() {
                     <div style={{ position: 'relative' }}>
                       <input
                         type="file"
-                        accept="image/*"
+                        accept="image/jpeg,image/png,image/webp,image/gif,image/bmp"
                         id="file-product"
                         style={{ display: 'none' }}
                         onChange={(e) => {

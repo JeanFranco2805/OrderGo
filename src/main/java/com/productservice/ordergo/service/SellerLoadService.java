@@ -14,6 +14,8 @@ public interface SellerLoadService {
 
     void registerRejection(Long sellerId, RejectOrderDTO dto);
 
+    void registerRejectionBatch(Long sellerId, RejectOrderBatchDTO dto);
+
     SellerLoadDTO getTodayLoad(Long sellerId);
 
     List<SellerLoadDTO> getLoadHistory(Long sellerId);
@@ -35,6 +37,8 @@ public interface SellerLoadService {
     void rejectOrderItems(Long sellerId, Long orderId);
 
     void removeOrderFromLoad(Long orderId);
+
+    void removeOrderFromLoadBySellerId(Long orderId, Long sellerId);
 
     void clearRejectionForOrder(Long orderId);
 
