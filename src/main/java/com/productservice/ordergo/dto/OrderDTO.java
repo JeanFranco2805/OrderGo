@@ -44,6 +44,8 @@ public class OrderDTO {
 
     private String paymentMethod;
 
+    private String createdAt;
+
     @NotEmpty(message = "El pedido debe tener al menos un item")
     private List<OrderItemDTO> items;
 }

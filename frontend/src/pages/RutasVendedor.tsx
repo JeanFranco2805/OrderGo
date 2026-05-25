@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { MapPin, Phone, Mail, Navigation, Calendar } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { MapPin, Phone, Mail, Navigation, Calendar, ShoppingCart } from 'lucide-react';
 import { customerApi, type Customer } from '../services/customerService';
 import { useApiCache } from '../hooks/useApiCache';
 import Modal from '../components/Modal';
@@ -8,6 +9,7 @@ import '../styles/pages.css';
 const DIAS_SEMANA = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
 
 export default function RutasVendedor() {
+  const navigate = useNavigate();
   const [selectedDay, setSelectedDay] = useState<string>('Lunes');
   const [selectedClient, setSelectedClient] = useState<Customer | null>(null);
 
@@ -167,6 +169,16 @@ export default function RutasVendedor() {
                 <div style={{ fontSize: '0.95rem', fontWeight: 700, marginTop: 4 }}>{selectedClient.visitFrequency || '—'}</div>
               </div>
             </div>
+            <button
+              className="btn btn-primary"
+              style={{ width: '100%', justifyContent: 'center' }}
+              onClick={() => {
+                if (!selectedClient) return;
+                navigate('/pedidos', { state: { preselectedCustomerId: selectedClient.id } });
+              }}
+            >
+              <ShoppingCart size={16} strokeWidth={1.5} /> Tomar pedido
+            </button>
             <button className="btn btn-outline" style={{ width: '100%', justifyContent: 'center' }} onClick={() => setSelectedClient(null)}>Cerrar</button>
           </div>
         )}

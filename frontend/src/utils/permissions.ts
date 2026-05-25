@@ -22,7 +22,6 @@ export const ROLE_ROUTES: Record<UserRole, string[]> = {
     '/productos',
     '/pedidos',
     '/clientes',
-    '/facturacion',
     '/ofertas',
     '/mapa',
     '/rutas',

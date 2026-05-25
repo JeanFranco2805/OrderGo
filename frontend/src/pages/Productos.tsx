@@ -13,7 +13,7 @@ import Pagination from '../components/Pagination';
 import '../styles/pages.css';
 
 export default function Productos() {
-  const { canCreate: canCreateProduct, canEdit: canEditProduct, canForceDelete: canForceDeleteProduct, isAdmin } = useRole();
+  const { canCreate: canCreateProduct, canForceDelete: canForceDeleteProduct, isAdmin } = useRole();
 
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(0);
@@ -296,10 +296,8 @@ export default function Productos() {
                   <button className="btn btn-outline" style={{ flex: 1, justifyContent: 'center', padding: '8px 10px', fontSize: '0.82rem' }} onClick={() => setSelectedProduct(p)}>
                     <Eye size={15} strokeWidth={1.5} /> Ver
                   </button>
-                  {canEditProduct() && (
-                    <button className="btn btn-primary" style={{ flex: 1, justifyContent: 'center', padding: '8px 10px', fontSize: '0.82rem' }} onClick={() => openEdit(p)}>
-                      <Pencil size={15} strokeWidth={1.5} /> Editar
-                    </button>
+                  {isAdmin && (
+                    <button className="navbar-icon-btn" onClick={() => openEdit(p)} style={{ color: '#4f46e5', backgroundColor: '#eef2ff', borderRadius: 8, padding: 6 }}><Pencil size={16} strokeWidth={1.5} /></button>
                   )}
                   <div style={{ display: 'flex', gap: 6, marginLeft: 'auto' }}>
                     {canForceDeleteProduct() && (

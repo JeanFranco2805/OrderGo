@@ -31,10 +31,17 @@ export interface VendorStats {
   averageDozensPerOrder: number;
 }
 
+export interface DailySales {
+  totalSales: number;
+  totalInvoices: number;
+  date: string;
+}
+
 export const dashboardApi = {
   getStats: () => api.get<DashboardStats>('/dashboard/stats'),
   getMonthlySales: () => api.get<MonthlyTotal[]>('/dashboard/monthly-sales'),
   getMonthlyExpenses: () => api.get<MonthlyTotal[]>('/dashboard/monthly-expenses'),
   getPaymentsByMethod: () => api.get<PaymentMethodTotal[]>('/dashboard/payments-by-method'),
   getVendorStats: () => api.get<VendorStats>('/dashboard/vendor-stats'),
+  getDailySales: (date: string) => api.get<DailySales>(`/dashboard/daily-sales?date=${date}`),
 };

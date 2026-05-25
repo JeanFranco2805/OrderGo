@@ -42,7 +42,7 @@ export default function Dashboard() {
   const [rejectOrderId, setRejectOrderId] = useState<number | null>(null);
   const [rejectPreviousStatus, setRejectPreviousStatus] = useState('');
   const [rejectItems, setRejectItems] = useState<RejectItem[]>([]);
-  const [rejectingId, setRejectingId] = useState<number | null>(null);
+  const [rejectingId] = useState<number | null>(null);
 
   const handleDeliver = async (id: number) => {
     setDeliveringId(id);
@@ -60,34 +60,21 @@ export default function Dashboard() {
     }
   };
 
-  const handleRejectDelivery = async (order: Order) => {
-    setRejectingId(order.id);
+  const handleRejectDelivery = (order: Order) => {
     setDeliverError('');
-    try {
-      await orderApi.updateStatus(order.id, 'RECHAZADO');
-      invalidateCache('pending-deliveries');
-      invalidateCache('dashboard-stats');
-      invalidateCache('products-');
-      refreshPending();
-
-      setRejectOrderId(order.id);
-      setRejectPreviousStatus(order.status);
-      setRejectItems(
-        order.items.map((item) => ({
-          productId: item.productId,
-          offerId: item.offerId,
-          productName: item.productName || item.offerName || 'Producto',
-          quantity: item.quantity,
-          maxQuantity: item.quantity,
-          checked: true,
-        }))
-      );
-      setShowRejectModal(true);
-    } catch (e: any) {
-      setDeliverError(e?.response?.data?.message || 'Error al marcar como rechazado');
-    } finally {
-      setRejectingId(null);
-    }
+    setRejectOrderId(order.id);
+    setRejectPreviousStatus(order.status);
+    setRejectItems(
+      order.items.map((item) => ({
+        productId: item.productId,
+        offerId: item.offerId,
+        productName: item.productName || item.offerName || 'Producto',
+        quantity: item.quantity,
+        maxQuantity: item.quantity,
+        checked: true,
+      }))
+    );
+    setShowRejectModal(true);
   };
 
   const pendingList = pendingDeliveries ?? [];
@@ -368,8 +355,11 @@ export default function Dashboard() {
         previousStatus={rejectPreviousStatus}
         items={rejectItems}
         onItemsChange={setRejectItems}
-        onSuccess={() => {
+        onSuccess={async () => {
           setDeliverError('');
+          if (rejectOrderId) {
+            await orderApi.updateStatus(rejectOrderId, 'RECHAZADO');
+          }
           invalidateCache('pending-deliveries');
           invalidateCache('dashboard-stats');
           invalidateCache('seller-load-');

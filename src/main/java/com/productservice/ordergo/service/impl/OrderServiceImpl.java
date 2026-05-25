@@ -460,6 +460,7 @@ public class OrderServiceImpl implements OrderService {
             .latitude(order.getLatitude())
             .longitude(order.getLongitude())
             .paymentMethod(order.getPaymentMethod())
+            .createdAt(order.getCreatedAt() != null ? order.getCreatedAt().toString() : null)
             .items(order.getItems().stream().map(item -> {
                 OrderItemDTO.OrderItemDTOBuilder itemBuilder = OrderItemDTO.builder()
                     .id(item.getId())

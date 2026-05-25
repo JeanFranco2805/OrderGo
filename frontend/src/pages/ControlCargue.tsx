@@ -1,10 +1,12 @@
 import { useState, useEffect } from 'react';
-import { Package, Truck, AlertTriangle, RefreshCw, Users, ClipboardList, Search, Calendar, Trash2, Printer } from 'lucide-react';
+import { Package, Truck, AlertTriangle, RefreshCw, Users, ClipboardList, Search, Calendar, Trash2, Printer, DollarSign } from 'lucide-react';
 import { sellerLoadApi, type AdminLoadReport, type SellerLoadItem } from '../services/sellerLoadService';
 import { orderRejectionApi, type OrderRejection } from '../services/orderRejectionService';
+import { orderMoneyReportApi, type DeliveryPersonMoneyReport } from '../services/orderMoneyReportService';
 import { productApi, type Product } from '../services/productService';
 import { formatCOP } from '../utils/currency';
 import { getLocalDateString } from '../utils/date';
+import Modal from '../components/Modal';
 import '../styles/pages.css';
 import Pagination from '../components/Pagination';
 
@@ -20,6 +22,16 @@ export default function ControlCargue() {
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
   const [confirmDelete, setConfirmDelete] = useState<{ sellerId: number; username: string } | null>(null);
+
+  // Money report modal
+  const [showMoneyReport, setShowMoneyReport] = useState(false);
+  const [moneyReportPeriod, setMoneyReportPeriod] = useState<'general' | 'month'>('general');
+  const [moneyReportMonth, setMoneyReportMonth] = useState(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  });
+  const [moneyReport, setMoneyReport] = useState<DeliveryPersonMoneyReport[]>([]);
+  const [moneyReportLoading, setMoneyReportLoading] = useState(false);
 
   const pageSize = 8;
   const [resumenPage, setResumenPage] = useState(0);
@@ -42,6 +54,24 @@ export default function ControlCargue() {
     } catch (err) {
       setError('Error eliminando cargue: ' + (err as Error).message);
       setConfirmDelete(null);
+    }
+  };
+
+  const fetchMoneyReport = async () => {
+    try {
+      setMoneyReportLoading(true);
+      const params: any = {};
+      if (moneyReportPeriod === 'month') {
+        const [y, m] = moneyReportMonth.split('-');
+        params.year = Number(y);
+        params.month = Number(m);
+      }
+      const data = await orderMoneyReportApi.getAll(params);
+      setMoneyReport(data);
+    } catch (err) {
+      setError('Error cargando reporte: ' + (err as Error).message);
+    } finally {
+      setMoneyReportLoading(false);
     }
   };
 
@@ -314,9 +344,14 @@ export default function ControlCargue() {
               </div>
             )}
           </div>
-          <button className="btn btn-outline" onClick={fetchData} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <RefreshCw size={16} strokeWidth={1.5} /> Actualizar
-          </button>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="btn btn-outline" onClick={() => { setShowMoneyReport(true); fetchMoneyReport(); }} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <DollarSign size={16} strokeWidth={1.5} /> Reporte de dinero
+            </button>
+            <button className="btn btn-outline" onClick={fetchData} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <RefreshCw size={16} strokeWidth={1.5} /> Actualizar
+            </button>
+          </div>
         </div>
       </div>
 
@@ -715,6 +750,72 @@ export default function ControlCargue() {
           </div>
         </div>
       )}
+
+      {/* Modal Reporte de Dinero */}
+      <Modal isOpen={showMoneyReport} onClose={() => setShowMoneyReport(false)} title="Reporte de dinero por domiciliario" wide>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <label style={{ fontSize: '0.85rem', color: 'var(--color-text-muted)' }}>Período:</label>
+              <select
+                className="form-control"
+                value={moneyReportPeriod}
+                onChange={(e) => setMoneyReportPeriod(e.target.value as 'general' | 'month')}
+                style={{ width: 140 }}
+              >
+                <option value="general">General (todo)</option>
+                <option value="month">Por mes</option>
+              </select>
+            </div>
+            {moneyReportPeriod === 'month' && (
+              <input
+                type="month"
+                className="form-control"
+                value={moneyReportMonth}
+                onChange={(e) => setMoneyReportMonth(e.target.value)}
+                style={{ width: 160 }}
+              />
+            )}
+            <button className="btn btn-primary" onClick={fetchMoneyReport} disabled={moneyReportLoading} style={{ padding: '6px 14px', fontSize: '0.85rem' }}>
+              {moneyReportLoading ? 'Cargando...' : 'Generar'}
+            </button>
+          </div>
+
+          {moneyReport.length > 0 && (
+            <>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
+                {moneyReport.map((r) => (
+                  <div key={r.deliveryPersonId} className="card" style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    <div style={{ fontWeight: 700, fontSize: '1rem', color: 'var(--color-text)' }}>{r.deliveryPersonName}</div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem' }}>
+                      <span style={{ color: '#047857', fontWeight: 600 }}>Entregado</span>
+                      <span style={{ fontWeight: 700, color: '#047857' }}>{formatCOP(r.deliveredValue)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem' }}>
+                      <span style={{ color: '#b91c1c', fontWeight: 600 }}>Rechazado</span>
+                      <span style={{ fontWeight: 700, color: '#b91c1c' }}>{formatCOP(r.rejectedValue)}</span>
+                    </div>
+                    <div style={{ borderTop: '1px solid var(--color-border)', paddingTop: 8, display: 'flex', justifyContent: 'space-between', fontSize: '0.92rem' }}>
+                      <span style={{ fontWeight: 700 }}>TOTAL</span>
+                      <span style={{ fontWeight: 800, color: 'var(--color-primary)' }}>{formatCOP(r.totalValue)}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="card" style={{ padding: 16, backgroundColor: 'var(--color-bg)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontWeight: 700, fontSize: '1rem' }}>TOTAL GENERAL</span>
+                <span style={{ fontWeight: 800, fontSize: '1.2rem', color: 'var(--color-primary)' }}>
+                  {formatCOP(moneyReport.reduce((sum, r) => sum + r.totalValue, 0))}
+                </span>
+              </div>
+            </>
+          )}
+
+          {moneyReport.length === 0 && !moneyReportLoading && (
+            <div style={{ textAlign: 'center', padding: 24, color: 'var(--color-text-muted)' }}>No hay datos para mostrar.</div>
+          )}
+        </div>
+      </Modal>
     </div>
   );
 }

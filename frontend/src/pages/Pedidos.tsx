@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import { useLocation } from 'react-router-dom';
 import { Plus, Search, Eye, MapPin, FileText, Trash2, X, Pencil, CreditCard, Tag, Truck, Printer, CheckSquare, Square, Download } from 'lucide-react';
 import { formatCOP } from '../utils/currency';
 import { getLocalDateString } from '../utils/date';
@@ -19,6 +20,13 @@ import ConfirmModal from '../components/ConfirmModal';
 import RejectionModal, { type RejectItem } from '../components/RejectionModal';
 import '../styles/pages.css';
 
+function isOrderFromToday(order: Order): boolean {
+  if (!order.createdAt) return true;
+  const orderDate = order.createdAt.split('T')[0];
+  const today = new Date().toISOString().split('T')[0];
+  return orderDate === today;
+}
+
 function statusDisplay(s: string) {
   switch (s) {
     case 'ENTREGADO': return { label: 'Entregado', class: 'badge-success' };
@@ -31,7 +39,7 @@ function statusDisplay(s: string) {
 }
 
 export default function Pedidos() {
-  const { canCreate: canCreateOrder, canEdit: canEditOrder, canForceDelete: canForceDeleteOrder, isAdmin, isDomiciliario } = useRole();
+  const { canCreate: canCreateOrder, canEdit: canEditOrder, canForceDelete: canForceDeleteOrder, isAdmin, isVendedor, isDomiciliario } = useRole();
 
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(0);
@@ -82,6 +90,22 @@ export default function Pedidos() {
   const [selectedOrderIds, setSelectedOrderIds] = useState<Set<number>>(new Set());
 
   const [businessSettings, setBusinessSettings] = useState<{ businessName?: string }>({});
+
+  const location = useLocation();
+  const preselectedHandled = useRef(false);
+
+  // Auto-open create modal when navigated from RutasVendedor with preselected customer
+  useEffect(() => {
+    const preselectedCustomerId = (location.state as any)?.preselectedCustomerId;
+    if (preselectedCustomerId && !preselectedHandled.current && canCreateOrder()) {
+      preselectedHandled.current = true;
+      openCreate().then(() => {
+        setCreateCustomerId(preselectedCustomerId);
+      });
+      // Clear location state so refresh doesn't reopen
+      window.history.replaceState({}, document.title);
+    }
+  }, [location.state]);
 
   useEffect(() => {
     businessSettingsApi.get()
@@ -168,6 +192,10 @@ export default function Pedidos() {
   };
 
   const openEdit = (order: Order) => {
+    if (isVendedor && !isOrderFromToday(order)) {
+      setErrorModal('Solo puedes editar pedidos del día de hoy.');
+      return;
+    }
     setEditOrderId(order.id);
     setEditCustomerId(order.customerId);
     setEditPaymentMethod(order.paymentMethod || '');
@@ -569,7 +597,7 @@ export default function Pedidos() {
                         {useRole().isDomiciliario && !o.deliveryPersonId && (o.status === 'PENDIENTE' || o.status === 'EN_PREPARACION') && (
                           <button className="navbar-icon-btn" aria-label="Tomar pedido" onClick={() => handleTakeOrder(o)} style={{ color: '#4f46e5', backgroundColor: '#eef2ff', borderRadius: 8, padding: 6 }}><Truck size={16} strokeWidth={1.5} /></button>
                         )}
-                        {canEditOrder() && (
+                        {canEditOrder() && (!isVendedor || isOrderFromToday(o)) && (
                           <button className="navbar-icon-btn" aria-label="Editar" onClick={() => openEdit(o)}><Pencil size={16} strokeWidth={1.5} /></button>
                         )}
                         {canCreateOrder() && (

@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react';
-import { Package, Plus, Loader2, Printer, History } from 'lucide-react';
+import { Package, Plus, Loader2, Printer, History, DollarSign, TrendingUp, TrendingDown } from 'lucide-react';
 import { sellerLoadApi, type SellerLoadItemCreate } from '../services/sellerLoadService';
 import { productApi } from '../services/productService';
 import { businessSettingsApi } from '../services/businessSettingsService';
+import { formatCOP } from '../utils/currency';
 import { useApiCache, invalidateCache } from '../hooks/useApiCache';
 import Modal from '../components/Modal';
 import '../styles/pages.css';
@@ -69,14 +70,22 @@ export default function CargueVendedor() {
     }
   };
 
+  const getPrice = (productId: number) => productList.find((p) => p.id === productId)?.price ?? 0;
+
   const stats = {
     totalAvailable: load?.items.reduce((sum, it) => sum + it.quantityLoaded, 0) ?? 0,
     activeItems: load?.items.filter((it) => it.quantityLoaded > 0).length ?? 0,
+    deliveredValue: load?.items.reduce((sum, it) => sum + it.quantityDelivered * getPrice(it.productId), 0) ?? 0,
+    rejectedValue: load?.items.reduce((sum, it) => sum + it.quantityRejected * getPrice(it.productId), 0) ?? 0,
+    availableValue: load?.items.reduce((sum, it) => sum + it.quantityLoaded * getPrice(it.productId), 0) ?? 0,
   };
 
   const statCards = [
     { label: 'Disponible', value: `${stats.totalAvailable.toFixed(2)}`, icon: Package, color: '#4f46e5', bg: '#eef2ff' },
     { label: 'Productos', value: `${stats.activeItems}`, icon: Package, color: '#10b981', bg: '#ecfdf5' },
+    { label: 'Entregado ($$)', value: formatCOP(stats.deliveredValue), icon: TrendingUp, color: '#047857', bg: '#ecfdf5' },
+    { label: 'Rechazado ($$)', value: formatCOP(stats.rejectedValue), icon: TrendingDown, color: '#b91c1c', bg: '#fef2f2' },
+    { label: 'Disponible ($$)', value: formatCOP(stats.availableValue), icon: DollarSign, color: '#0ea5e9', bg: '#f0f9ff' },
   ];
 
   // Print current load (only available items, no prices)
@@ -242,12 +251,99 @@ export default function CargueVendedor() {
         </div>
       )}
 
-      {/* Productos cargados (solo disponibles) */}
-      {load && (
-        <div className="card">
+      {/* Tabla: Productos entregados */}
+      {load && load.items.some((it) => it.quantityDelivered > 0) && (
+        <div className="card" style={{ marginBottom: 24 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
-            <h2 style={{ fontSize: '1rem', fontWeight: 700 }}>Productos cargados</h2>
-            <div style={{ display: 'flex', gap: 8 }}>
+            <h2 style={{ fontSize: '1rem', fontWeight: 700, color: '#047857' }}>Productos entregados</h2>
+            <span style={{ fontSize: '0.9rem', fontWeight: 700, color: '#047857' }}>
+              Total: {formatCOP(stats.deliveredValue)}
+            </span>
+          </div>
+          <div className="table-wrapper">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Producto</th>
+                  <th style={{ textAlign: 'right' }}>Cantidad entregada</th>
+                  <th style={{ textAlign: 'center' }}>Unidad</th>
+                  <th style={{ textAlign: 'right' }}>Precio unitario</th>
+                  <th style={{ textAlign: 'right' }}>Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {load.items
+                  .filter((it) => it.quantityDelivered > 0)
+                  .map((it) => {
+                    const price = getPrice(it.productId);
+                    const total = it.quantityDelivered * price;
+                    return (
+                      <tr key={`del-${it.id}`}>
+                        <td><strong>{it.productName}</strong></td>
+                        <td style={{ textAlign: 'right', fontFamily: 'ui-monospace, monospace' }}>{it.quantityDelivered.toFixed(2)}</td>
+                        <td style={{ textAlign: 'center' }}><span className="badge badge-info">{it.unitOfMeasure}</span></td>
+                        <td style={{ textAlign: 'right' }}>{formatCOP(price)}</td>
+                        <td style={{ textAlign: 'right', fontWeight: 700 }}>{formatCOP(total)}</td>
+                      </tr>
+                    );
+                  })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Tabla: Productos rechazados */}
+      {load && load.items.some((it) => it.quantityRejected > 0) && (
+        <div className="card" style={{ marginBottom: 24 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
+            <h2 style={{ fontSize: '1rem', fontWeight: 700, color: '#b91c1c' }}>Productos rechazados</h2>
+            <span style={{ fontSize: '0.9rem', fontWeight: 700, color: '#b91c1c' }}>
+              Total: {formatCOP(stats.rejectedValue)}
+            </span>
+          </div>
+          <div className="table-wrapper">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Producto</th>
+                  <th style={{ textAlign: 'right' }}>Cantidad rechazada</th>
+                  <th style={{ textAlign: 'center' }}>Unidad</th>
+                  <th style={{ textAlign: 'right' }}>Precio unitario</th>
+                  <th style={{ textAlign: 'right' }}>Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {load.items
+                  .filter((it) => it.quantityRejected > 0)
+                  .map((it) => {
+                    const price = getPrice(it.productId);
+                    const total = it.quantityRejected * price;
+                    return (
+                      <tr key={`rej-${it.id}`}>
+                        <td><strong>{it.productName}</strong></td>
+                        <td style={{ textAlign: 'right', fontFamily: 'ui-monospace, monospace' }}>{it.quantityRejected.toFixed(2)}</td>
+                        <td style={{ textAlign: 'center' }}><span className="badge badge-info">{it.unitOfMeasure}</span></td>
+                        <td style={{ textAlign: 'right' }}>{formatCOP(price)}</td>
+                        <td style={{ textAlign: 'right', fontWeight: 700 }}>{formatCOP(total)}</td>
+                      </tr>
+                    );
+                  })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Tabla: Productos disponibles (lo que llevo) */}
+      {load && (
+        <div className="card" style={{ marginBottom: 24 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
+            <h2 style={{ fontSize: '1rem', fontWeight: 700, color: '#0ea5e9' }}>Productos disponibles</h2>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <span style={{ fontSize: '0.9rem', fontWeight: 700, color: '#0ea5e9' }}>
+                Valor total: {formatCOP(stats.availableValue)}
+              </span>
               <button className="btn btn-outline" onClick={handlePrintLoad}>
                 <Printer size={16} strokeWidth={1.5} /> Imprimir cargue
               </button>
@@ -271,18 +367,26 @@ export default function CargueVendedor() {
                       <thead>
                         <tr>
                           <th>Producto</th>
-                          <th style={{ textAlign: 'right' }}>Cantidad</th>
+                          <th style={{ textAlign: 'right' }}>Cantidad disponible</th>
                           <th style={{ textAlign: 'center' }}>Unidad</th>
+                          <th style={{ textAlign: 'right' }}>Precio unitario</th>
+                          <th style={{ textAlign: 'right' }}>Total</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {activeItems.map((it) => (
-                          <tr key={it.id}>
-                            <td><strong>{it.productName}</strong></td>
-                            <td style={{ textAlign: 'right', fontFamily: 'ui-monospace, monospace' }}>{it.quantityLoaded.toFixed(2)}</td>
-                            <td style={{ textAlign: 'center' }}><span className="badge badge-info">{it.unitOfMeasure}</span></td>
-                          </tr>
-                        ))}
+                        {activeItems.map((it) => {
+                          const price = getPrice(it.productId);
+                          const total = it.quantityLoaded * price;
+                          return (
+                            <tr key={`avail-${it.id}`}>
+                              <td><strong>{it.productName}</strong></td>
+                              <td style={{ textAlign: 'right', fontFamily: 'ui-monospace, monospace' }}>{it.quantityLoaded.toFixed(2)}</td>
+                              <td style={{ textAlign: 'center' }}><span className="badge badge-info">{it.unitOfMeasure}</span></td>
+                              <td style={{ textAlign: 'right' }}>{formatCOP(price)}</td>
+                              <td style={{ textAlign: 'right', fontWeight: 700 }}>{formatCOP(total)}</td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
@@ -295,9 +399,9 @@ export default function CargueVendedor() {
 
       {/* Historial de entregas y rechazos */}
       {load && load.items.length > 0 && (
-        <div className="card" style={{ marginTop: 24 }}>
+        <div className="card" style={{ marginTop: 0 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
-            <h2 style={{ fontSize: '1rem', fontWeight: 700 }}>Historial de entregas</h2>
+            <h2 style={{ fontSize: '1rem', fontWeight: 700 }}>Historial completo</h2>
             <button className="btn btn-outline" onClick={handlePrintHistory}>
               <History size={16} strokeWidth={1.5} /> Imprimir historial
             </button>

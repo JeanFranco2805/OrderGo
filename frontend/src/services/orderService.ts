@@ -27,6 +27,7 @@ export interface Order {
   latitude?: number;
   longitude?: number;
   paymentMethod?: string;
+  createdAt?: string;
   items: OrderItem[];
 }
 

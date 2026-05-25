@@ -85,4 +85,10 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
 
     @Query("SELECT COUNT(DISTINCT o.customer.id) FROM Order o WHERE CAST(o.createdAt AS DATE) = :date AND o.deliveryPerson.id = :dpId AND o.status = :status")
     Long countDistinctCustomersByDateAndDeliveryPersonAndStatus(@Param("date") LocalDate date, @Param("dpId") Long dpId, @Param("status") OrderStatus status);
+
+    @Query("SELECT COALESCE(SUM(o.totalAmount), 0) FROM Order o WHERE o.deliveryPerson.id = :dpId AND o.status = :status")
+    java.math.BigDecimal sumTotalAmountByDeliveryPersonIdAndStatus(@Param("dpId") Long dpId, @Param("status") OrderStatus status);
+
+    @Query("SELECT COALESCE(SUM(o.totalAmount), 0) FROM Order o WHERE o.deliveryPerson.id = :dpId AND o.status = :status AND YEAR(o.createdAt) = :year AND MONTH(o.createdAt) = :month")
+    java.math.BigDecimal sumTotalAmountByDeliveryPersonIdAndStatusAndMonth(@Param("dpId") Long dpId, @Param("status") OrderStatus status, @Param("year") int year, @Param("month") int month);
 }

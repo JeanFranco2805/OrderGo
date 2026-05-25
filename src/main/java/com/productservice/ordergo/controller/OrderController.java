@@ -2,6 +2,11 @@ package com.productservice.ordergo.controller;
 
 import com.productservice.ordergo.dto.OrderDTO;
 import com.productservice.ordergo.dto.OrderUpdateDTO;
+import com.productservice.ordergo.dto.DeliveryPersonMoneyReportDTO;
+import com.productservice.ordergo.entity.OrderStatus;
+import com.productservice.ordergo.entity.User;
+import com.productservice.ordergo.repository.OrderRepository;
+import com.productservice.ordergo.repository.UserRepository;
 import com.productservice.ordergo.service.OrderService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -20,6 +25,8 @@ import java.util.List;
 public class OrderController {
 
     private final OrderService orderService;
+    private final OrderRepository orderRepository;
+    private final UserRepository userRepository;
 
     @GetMapping
     public ResponseEntity<Page<OrderDTO>> getAll(
@@ -68,5 +75,38 @@ public class OrderController {
     @GetMapping("/pending-delivery")
     public ResponseEntity<List<OrderDTO>> getPendingDeliveries() {
         return ResponseEntity.ok(orderService.findPendingDeliveries());
+    }
+
+    @GetMapping("/money-report")
+    public ResponseEntity<List<DeliveryPersonMoneyReportDTO>> getMoneyReport(
+            @RequestParam(required = false) Integer year,
+            @RequestParam(required = false) Integer month) {
+        List<User> deliveryPeople = userRepository.findAll().stream()
+            .filter(u -> "DOMICILIARIO".equalsIgnoreCase(u.getRole()))
+            .toList();
+
+        String periodLabel = (year != null && month != null) ? String.format("%04d-%02d", year, month) : "General";
+
+        List<DeliveryPersonMoneyReportDTO> result = deliveryPeople.stream().map(dp -> {
+            java.math.BigDecimal delivered;
+            java.math.BigDecimal rejected;
+            if (year != null && month != null) {
+                delivered = orderRepository.sumTotalAmountByDeliveryPersonIdAndStatusAndMonth(dp.getId(), OrderStatus.ENTREGADO, year, month);
+                rejected = orderRepository.sumTotalAmountByDeliveryPersonIdAndStatusAndMonth(dp.getId(), OrderStatus.RECHAZADO, year, month);
+            } else {
+                delivered = orderRepository.sumTotalAmountByDeliveryPersonIdAndStatus(dp.getId(), OrderStatus.ENTREGADO);
+                rejected = orderRepository.sumTotalAmountByDeliveryPersonIdAndStatus(dp.getId(), OrderStatus.RECHAZADO);
+            }
+            return DeliveryPersonMoneyReportDTO.builder()
+                .deliveryPersonId(dp.getId())
+                .deliveryPersonName(dp.getUsername())
+                .deliveredValue(delivered != null ? delivered : java.math.BigDecimal.ZERO)
+                .rejectedValue(rejected != null ? rejected : java.math.BigDecimal.ZERO)
+                .totalValue(delivered != null && rejected != null ? delivered.add(rejected) : java.math.BigDecimal.ZERO)
+                .periodLabel(periodLabel)
+                .build();
+        }).toList();
+
+        return ResponseEntity.ok(result);
     }
 }

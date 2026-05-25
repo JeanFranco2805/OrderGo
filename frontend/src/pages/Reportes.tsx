@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { TrendingUp, TrendingDown, DollarSign, ShoppingCart, Users, Receipt, Package, CreditCard, Download, PieChart as PieIcon } from 'lucide-react';
+import { TrendingUp, TrendingDown, DollarSign, ShoppingCart, Users, Receipt, Package, CreditCard, Download, PieChart as PieIcon, Calendar } from 'lucide-react';
 import * as XLSX from 'xlsx-js-style';
 import { formatCOP } from '../utils/currency';
 import { getLocalDateString } from '../utils/date';
@@ -346,6 +346,15 @@ export default function Reportes() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
+  // Period filter
+  const [periodType, setPeriodType] = useState<'general' | 'day' | 'month' | 'year'>('general');
+  const [dayValue, setDayValue] = useState(getLocalDateString());
+  const [monthValue, setMonthValue] = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  });
+  const [yearValue, setYearValue] = useState(() => String(new Date().getFullYear()));
+
   useEffect(() => {
     Promise.all([
       dashboardApi.getStats(),
@@ -366,23 +375,83 @@ export default function Reportes() {
       });
   }, []);
 
-  const stats = statsData
-    ? [
+  // Filter data by selected period
+  const filteredMonthlySales = (() => {
+    if (periodType === 'month' && monthValue) {
+      return monthlySales.filter((s) => s.month === monthValue);
+    }
+    if (periodType === 'year' && yearValue) {
+      const yearPrefix = yearValue + '-';
+      const agg = new Map<string, number>();
+      monthlySales.filter((s) => s.month.startsWith(yearPrefix)).forEach((s) => {
+        agg.set(s.month, (agg.get(s.month) || 0) + s.amount);
+      });
+      return Array.from(agg.entries()).map(([month, amount]) => ({ month, amount }));
+    }
+    return monthlySales;
+  })();
+
+  const filteredMonthlyExpenses = (() => {
+    if (periodType === 'month' && monthValue) {
+      return monthlyExpenses.filter((e) => e.month === monthValue);
+    }
+    if (periodType === 'year' && yearValue) {
+      const yearPrefix = yearValue + '-';
+      const agg = new Map<string, number>();
+      monthlyExpenses.filter((e) => e.month.startsWith(yearPrefix)).forEach((e) => {
+        agg.set(e.month, (agg.get(e.month) || 0) + e.amount);
+      });
+      return Array.from(agg.entries()).map(([month, amount]) => ({ month, amount }));
+    }
+    return monthlyExpenses;
+  })();
+
+  const [dayOrders, setDayOrders] = useState<{ totalAmount: number; totalOrders: number }>({ totalAmount: 0, totalOrders: 0 });
+
+  useEffect(() => {
+    if (periodType === 'day' && dayValue) {
+      dashboardApi.getDailySales(dayValue)
+        .then((res) => {
+          setDayOrders({
+            totalAmount: res.totalSales || 0,
+            totalOrders: res.totalInvoices || 0,
+          });
+        })
+        .catch(() => setDayOrders({ totalAmount: 0, totalOrders: 0 }));
+    }
+  }, [periodType, dayValue]);
+
+  const stats = (() => {
+    if (periodType === 'day') {
+      return [
+        { label: 'Ventas del día', value: formatCOP(dayOrders.totalAmount), icon: DollarSign, change: '', up: true, color: '#4f46e5', bg: '#eef2ff' },
+        { label: 'Pedidos del día', value: String(dayOrders.totalOrders), icon: ShoppingCart, change: '', up: true, color: '#10b981', bg: '#ecfdf5' },
+      ];
+    }
+    const totalSales = filteredMonthlySales.reduce((s, x) => s + x.amount, 0);
+    const totalOrders = filteredMonthlySales.length > 0 ? Math.round(totalSales / (statsData?.averageTicket || 1)) : 0;
+    if (periodType === 'general' && statsData) {
+      return [
         { label: 'Ventas totales', value: formatCOP(statsData.totalSales), icon: DollarSign, change: '+18%', up: true, color: '#4f46e5', bg: '#eef2ff' },
         { label: 'Pedidos totales', value: String(statsData.totalOrders), icon: ShoppingCart, change: '+12%', up: true, color: '#10b981', bg: '#ecfdf5' },
         { label: 'Clientes activos', value: String(statsData.totalCustomers), icon: Users, change: '+24%', up: true, color: '#0ea5e9', bg: '#f0f9ff' },
         { label: 'Promedio por pedido', value: formatCOP(statsData.averageTicket), icon: Receipt, change: '-3%', up: false, color: '#f59e0b', bg: '#fffbeb' },
-      ]
-    : [];
+      ];
+    }
+    return [
+      { label: 'Ventas del período', value: formatCOP(totalSales), icon: DollarSign, change: '', up: true, color: '#4f46e5', bg: '#eef2ff' },
+      { label: 'Pedidos del período', value: String(totalOrders), icon: ShoppingCart, change: '', up: true, color: '#10b981', bg: '#ecfdf5' },
+    ];
+  })();
 
-  const maxSales = Math.max(...monthlySales.map((s) => s.amount), 1);
-  const maxExpenses = Math.max(...monthlyExpenses.map((e) => e.amount), 1);
+  const maxSales = Math.max(...filteredMonthlySales.map((s) => s.amount), 1);
+  const maxExpenses = Math.max(...filteredMonthlyExpenses.map((e) => e.amount), 1);
 
-  const totalSalesAcc = monthlySales.reduce((s, x) => s + x.amount, 0);
-  const totalExpensesAcc = monthlyExpenses.reduce((s, x) => s + x.amount, 0);
+  const totalSalesAcc = filteredMonthlySales.reduce((s, x) => s + x.amount, 0);
+  const totalExpensesAcc = filteredMonthlyExpenses.reduce((s, x) => s + x.amount, 0);
 
   /* Distribución mensual de ventas para donut */
-  const salesByMonthForDonut = monthlySales.map((s) => ({ label: monthLabel(s.month).split(' ')[0], value: s.amount }));
+  const salesByMonthForDonut = filteredMonthlySales.map((s) => ({ label: monthLabel(s.month).split(' ')[0], value: s.amount }));
 
   return (
     <div>
@@ -401,6 +470,27 @@ export default function Reportes() {
           {error}
         </div>
       )}
+
+      <div className="card" style={{ marginBottom: 16, padding: '12px 16px' }}>
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+          <Calendar size={16} strokeWidth={1.5} color="var(--color-text-muted)" />
+          <select className="form-control" value={periodType} onChange={(e) => setPeriodType(e.target.value as any)} style={{ width: 130 }}>
+            <option value="general">General</option>
+            <option value="day">Día</option>
+            <option value="month">Mes</option>
+            <option value="year">Año</option>
+          </select>
+          {periodType === 'day' && (
+            <input type="date" className="form-control" value={dayValue} onChange={(e) => setDayValue(e.target.value)} style={{ width: 160 }} />
+          )}
+          {periodType === 'month' && (
+            <input type="month" className="form-control" value={monthValue} onChange={(e) => setMonthValue(e.target.value)} style={{ width: 160 }} />
+          )}
+          {periodType === 'year' && (
+            <input type="number" className="form-control" value={yearValue} onChange={(e) => setYearValue(e.target.value)} style={{ width: 100 }} min={2020} max={2100} />
+          )}
+        </div>
+      </div>
 
       {loading ? (
         <div className="page-placeholder">

@@ -48,4 +48,10 @@ public interface InvoiceRepository extends JpaRepository<Invoice, Long> {
     @org.springframework.data.jpa.repository.Modifying
     @org.springframework.data.jpa.repository.Query("DELETE FROM Invoice i WHERE i.customer.id = :customerId")
     void deleteByCustomerId(Long customerId);
+
+    @Query("SELECT COALESCE(SUM(i.amount), 0) FROM Invoice i WHERE i.invoiceDate = :date")
+    BigDecimal getTotalInvoicedByDate(@Param("date") LocalDate date);
+
+    @Query("SELECT COUNT(i) FROM Invoice i WHERE i.invoiceDate = :date")
+    Long countByInvoiceDate(@Param("date") LocalDate date);
 }

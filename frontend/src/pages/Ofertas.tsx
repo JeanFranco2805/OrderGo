@@ -14,7 +14,7 @@ import Pagination from '../components/Pagination';
 import '../styles/pages.css';
 
 export default function Ofertas() {
-  const { canCreate: canCreateOffer, canEdit: canEditOffer, canForceDelete: canForceDeleteOffer } = useRole();
+  const { canCreate: canCreateOffer, canForceDelete: canForceDeleteOffer, isAdmin } = useRole();
 
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(0);
@@ -409,8 +409,8 @@ export default function Ofertas() {
                 </div>
                 <div style={{ display: 'flex', gap: 8, marginTop: 'auto', paddingTop: 10, alignItems: 'center' }}>
                   <button className="btn btn-outline" style={{ flex: 1, justifyContent: 'center', padding: '8px 10px', fontSize: '0.82rem' }} onClick={() => setSelectedOffer(o)}><Eye size={15} strokeWidth={1.5} /> Ver</button>
-                  {canEditOffer() && (
-                    <button className="btn btn-primary" style={{ flex: 1, justifyContent: 'center', padding: '8px 10px', fontSize: '0.82rem' }} onClick={() => openEdit(o)}><Pencil size={15} strokeWidth={1.5} /> Editar</button>
+                  {isAdmin && (
+                    <button className="navbar-icon-btn" onClick={() => openEdit(o)} style={{ color: '#4f46e5', backgroundColor: '#eef2ff', borderRadius: 8, padding: 6 }}><Pencil size={16} strokeWidth={1.5} /></button>
                   )}
                   <div style={{ display: 'flex', gap: 6, marginLeft: 'auto' }}>
                     {canForceDeleteOffer() && (

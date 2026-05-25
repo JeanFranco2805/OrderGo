@@ -598,8 +598,35 @@ export default function Clientes() {
       {/* Modal Ubicar en mapa */}
       <Modal isOpen={showMapModal} onClose={() => setShowMapModal(false)} title={`Ubicar cliente: ${mapClient?.name || ''}`} wide>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          <div style={{ fontSize: '0.85rem', color: 'var(--color-text-muted)', lineHeight: 1.5 }}>
-            <strong>Instrucciones:</strong> Haz clic o toca en el mapa para colocar el pin exactamente donde vive el cliente. Puedes arrastrar el mapa y usar la rueda del ratón para acercar/alejar. La dirección se actualiza automáticamente y puedes editarla antes de guardar.
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
+            <div style={{ fontSize: '0.85rem', color: 'var(--color-text-muted)', lineHeight: 1.5, flex: 1 }}>
+              <strong>Instrucciones:</strong> Haz clic o toca en el mapa para colocar el pin exactamente donde vive el cliente. Puedes arrastrar el mapa y usar la rueda del ratón para acercar/alejar. La dirección se actualiza automáticamente y puedes editarla antes de guardar.
+            </div>
+            <button
+              className="btn btn-outline"
+              style={{ padding: '6px 12px', fontSize: '0.82rem', whiteSpace: 'nowrap' }}
+              onClick={() => {
+                if (!navigator.geolocation) {
+                  setErrorModal('Tu navegador no soporta geolocalización.');
+                  return;
+                }
+                navigator.geolocation.getCurrentPosition(
+                  async (pos) => {
+                    const lat = pos.coords.latitude;
+                    const lng = pos.coords.longitude;
+                    setMapLat(lat);
+                    setMapLng(lng);
+                    setMapAddress('Cargando dirección...');
+                    const addr = await reverseGeocode(lat, lng);
+                    setMapAddress(addr || 'Dirección no encontrada');
+                  },
+                  () => setErrorModal('No se pudo obtener tu ubicación. Verifica los permisos.'),
+                  { enableHighAccuracy: true, timeout: 10000 }
+                );
+              }}
+            >
+              <Crosshair size={14} strokeWidth={1.5} /> Mi ubicación
+            </button>
           </div>
 
           <div style={{ borderRadius: 'var(--radius-md)', overflow: 'hidden', border: '1px solid var(--color-border)', flexShrink: 0 }}>
