@@ -21,8 +21,6 @@ public class DefaultAdminConfig {
                     .build();
                 userRepository.save(admin);
                 System.out.println("✅ Usuario admin creado por defecto (usuario: admin, contraseña: admin123)");
-            } else {
-                System.out.println("ℹ️ Usuario admin ya existe, omitiendo creación por defecto");
             }
         };
     }
